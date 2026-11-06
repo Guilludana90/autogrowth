@@ -39,7 +39,7 @@ export default function CampaignsPage() {
         const cl = leadsInPeriod.filter((l) => l.campaignId === c.id);
         const m = derive(sumMetrics(mrows));
         const f = crmFunnel(cl);
-        return { c, m, f, gap: reconcile(m.platformLeads, f.crmLeads), rec: analyzeCampaign(c, mrows, cl, now) };
+        return { c, m, f, gap: reconcile(m.platformLeads, f.crmLeads), rec: analyzeCampaign(c, mrows, cl, now, range) };
       })
       .sort((a, b) => {
         const v = (x: typeof a) =>

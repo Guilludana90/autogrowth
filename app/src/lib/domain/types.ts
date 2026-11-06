@@ -242,3 +242,78 @@ export const INTEGRATION_STATUS_LABEL: Record<IntegrationStatus, [string, 'green
   error: ['Error', 'red'],
   revoked: ['Desconectada', 'gray'],
 };
+
+// ───────────── P3 ─────────────
+
+export const PROMPT_STATUSES = ['draft', 'in_review', 'approved', 'active', 'rejected', 'rolled_back'] as const;
+export type PromptStatus = (typeof PROMPT_STATUSES)[number];
+export type PromptAction = 'submit' | 'approve' | 'reject' | 'activate' | 'rollback';
+
+export const PROMPT_STATUS_LABEL: Record<PromptStatus, [string, 'green' | 'gold' | 'red' | 'gray' | 'violet']> = {
+  draft: ['Borrador', 'gray'],
+  in_review: ['En revisión', 'gold'],
+  approved: ['Aprobada', 'violet'],
+  active: ['Activa', 'green'],
+  rejected: ['Rechazada', 'red'],
+  rolled_back: ['Retirada', 'gray'],
+};
+
+/** Analizadores gobernados. Cada uno tiene a lo sumo una versión activa por concesionario. */
+export const ANALYZERS = { campaign_analyst: 'Analista de campañas' } as const;
+export type AnalyzerName = keyof typeof ANALYZERS;
+
+export interface PromptVersion {
+  id: string;
+  organizationId: OrganizationId;
+  name: AnalyzerName;
+  version: string;
+  promptText: string;
+  changeNote?: string;
+  status: PromptStatus;
+  createdBy: string;
+  createdByName?: string;
+  approvedByName?: string;
+  approvedAt?: string;
+  decidedReason?: string;
+  submittedAt?: string;
+  activatedAt?: string;
+  createdAt: string;
+}
+
+export interface PromptEvent {
+  id: string;
+  versionId: string;
+  fromStatus?: PromptStatus;
+  toStatus: PromptStatus;
+  actorName?: string;
+  reason?: string;
+  createdAt: string;
+}
+
+export interface RecommendationRun {
+  id: string;
+  organizationId: OrganizationId;
+  platform: Platform;
+  campaignId: string;
+  windowFrom: string;
+  windowTo: string;
+  engine: 'rules' | 'ai';
+  version: string;
+  promptVersionId?: string;
+  priority: 'low' | 'medium' | 'high';
+  problemArea: 'media' | 'capture' | 'sales' | 'data' | 'none';
+  confidence: number;
+  payload: unknown;
+  createdAt: string;
+}
+
+export interface RecommendationFeedback {
+  id: string;
+  organizationId: OrganizationId;
+  runId: string;
+  useful: boolean;
+  comment?: string;
+  userId: string;
+  userName?: string;
+  createdAt: string;
+}

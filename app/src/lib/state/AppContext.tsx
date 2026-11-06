@@ -3,6 +3,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { DEMO_MODE, getRepository } from '../data';
 import type {
+  AiAnalysisResult,
+  AiStatus,
+  NewPromptDraftInput,
   ImportJob,
   LeadPatch,
   NewLeadInput,
@@ -18,6 +21,8 @@ import type { MetricImportPreview } from '../domain/metricImport';
 import { byChannel, leadsByChannel } from '../domain/reconcile';
 import { can, grantableRoles, type Action } from '../domain/permissions';
 import { canTransition, type QuoteAction } from '../domain/quotes';
+import { canPrompt } from '../domain/governance';
+import type { CampaignRecommendation } from '../domain/recommendations';
 import type {
   Advisor,
   Campaign,
@@ -31,7 +36,12 @@ import type {
   OrganizationId,
   Platform,
   PriceDocument,
+  PromptAction,
+  PromptEvent,
+  PromptVersion,
   Quote,
+  RecommendationFeedback,
+  RecommendationRun,
   Role,
   Task,
 } from '../domain/types';
@@ -59,6 +69,11 @@ interface AppState {
   members: Member[];
   metricJobs: MetricImportJob[];
   integrations: Integration[];
+  prompts: PromptVersion[];
+  promptEvents: PromptEvent[];
+  runs: RecommendationRun[];
+  feedback: RecommendationFeedback[];
+  ai: AiStatus;
   /** Rol elegido en el selector de la demo (solo DEMO_MODE). */
   demoRole: Role;
   setDemoRole: (r: Role) => void;
@@ -66,6 +81,14 @@ interface AppState {
   /** Permiso para una acción en una org; con 'all' exige el permiso en alguna org visible. */
   allowed: (action: Action, org: OrganizationId | 'all') => boolean;
   canQuote: (q: Quote, action: QuoteAction) => boolean;
+  canPromptAction: (v: PromptVersion, action: PromptAction) => boolean;
+  createPromptDraft: (input: NewPromptDraftInput) => Promise<PromptVersion>;
+  updatePromptDraft: (v: PromptVersion, text: string, note?: string) => Promise<PromptVersion>;
+  transitionPrompt: (v: PromptVersion, action: PromptAction, reason?: string) => Promise<PromptVersion>;
+  /** Corrida guardada para esta recomendación (la crea si hace falta, p. ej. para dejar feedback). */
+  ensureRun: (org: OrganizationId, platform: Platform, rec: CampaignRecommendation, existing?: RecommendationRun) => Promise<RecommendationRun>;
+  submitFeedback: (run: RecommendationRun, useful: boolean, comment?: string) => Promise<RecommendationFeedback>;
+  runAiAnalysis: (org: OrganizationId, platform: Platform, campaignId: string, range: DateRange) => Promise<AiAnalysisResult>;
   createLead: (input: NewLeadInput) => Promise<Lead>;
   updateLead: (id: string, patch: LeadPatch) => Promise<Lead>;
   applyImport: (p: ImportPreview, fileName: string) => Promise<ImportJob>;
@@ -112,6 +135,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [members, setMembers] = useState<Member[]>([]);
   const [metricJobs, setMetricJobs] = useState<MetricImportJob[]>([]);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [prompts, setPrompts] = useState<PromptVersion[]>([]);
+  const [promptEvents, setPromptEvents] = useState<PromptEvent[]>([]);
+  const [runs, setRuns] = useState<RecommendationRun[]>([]);
+  const [feedback, setFeedback] = useState<RecommendationFeedback[]>([]);
+  const [ai, setAi] = useState<AiStatus>({ enabled: false, reason: 'Consultando…' });
   const [demoRole, setDemoRoleState] = useState<Role>('super_admin');
   const [activityVersion, setActivityVersion] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -132,7 +160,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       }
       const isAdminSomewhere = DEMO_MODE || Object.values(s.roles).some((x) => x === 'super_admin' || x === 'dealership_admin');
-      const [l, a, c, m, i, t, q, d, mem, mj, integ] = await Promise.all([
+      const [l, a, c, m, i, t, q, d, mem, mj, integ, pv, pe, rr, fb, st] = await Promise.all([
         r.listLeads(),
         r.listAdvisors(),
         r.listCampaigns(),
@@ -144,7 +172,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
         isAdminSomewhere ? r.listMembers() : Promise.resolve([]),
         isAdminSomewhere ? r.listMetricImports() : Promise.resolve([]),
         isAdminSomewhere ? r.listIntegrations() : Promise.resolve([]),
+        r.listPromptVersions(),
+        r.listPromptEvents(),
+        r.listRecommendationRuns(),
+        r.listFeedback(),
+        r.aiStatus().catch((e: unknown) => ({ enabled: false, reason: e instanceof Error ? e.message : String(e) })),
       ]);
+      setPrompts(pv);
+      setPromptEvents(pe);
+      setRuns(rr);
+      setFeedback(fb);
+      setAi(st);
       setMetricJobs(mj);
       setIntegrations(integ);
       setSession(s);
@@ -215,6 +253,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [roleFor, session],
   );
 
+  const canPromptAction = useCallback(
+    (v: PromptVersion, action: PromptAction) => canPrompt(action, v.status, roleFor(v.organizationId), v.createdBy === session?.userId),
+    [roleFor, session],
+  );
+
   const guard = <T,>(fn: (r: Repository) => Promise<T>) => {
     if (!repo) return Promise.reject(new Error('Datos no disponibles'));
     return fn(repo);
@@ -229,7 +272,70 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setIntegrations(integ);
   };
 
+  const refreshPrompts = async (r: Repository) => {
+    const [pv, pe] = await Promise.all([r.listPromptVersions(), r.listPromptEvents()]);
+    setPrompts(pv);
+    setPromptEvents(pe);
+  };
+
   const value: AppState = {
+    prompts,
+    promptEvents,
+    runs,
+    feedback,
+    ai,
+    canPromptAction,
+    createPromptDraft: (input) =>
+      allowed('prompt:draft', input.organizationId)
+        ? guard(async (r) => {
+            const v = await r.createPromptDraft(input);
+            await refreshPrompts(r);
+            return v;
+          })
+        : deny('Solo Super Admin o Gerente crean borradores de prompt'),
+    updatePromptDraft: (v, text, note) =>
+      v.status === 'draft' && v.createdBy === session?.userId
+        ? guard(async (r) => {
+            const next = await r.updatePromptDraft(v.id, text, note);
+            await refreshPrompts(r);
+            return next;
+          })
+        : deny('Solo el autor edita su borrador'),
+    transitionPrompt: (v, action, reason) =>
+      canPromptAction(v, action)
+        ? guard(async (r) => {
+            const next = await r.transitionPrompt(v.id, action, reason);
+            await refreshPrompts(r);
+            return next;
+          })
+        : deny(action === 'submit' ? 'Solo el autor envía su borrador a revisión' : 'Solo Super Admin aprueba, rechaza, publica o vuelve atrás'),
+    ensureRun: (org, platform, rec, existing) => {
+      if (existing) return Promise.resolve(existing);
+      if (!allowed('recommendation:run', org)) return deny('Tu rol no puede guardar diagnósticos');
+      return guard(async (r) => {
+        const run = await r.saveRulesRun(org, platform, rec);
+        setRuns((rs) => [run, ...rs]);
+        return run;
+      });
+    },
+    submitFeedback: (run, useful, comment) =>
+      allowed('recommendation:feedback', run.organizationId)
+        ? guard(async (r) => {
+            const f = await r.submitFeedback(run.id, useful, comment);
+            setFeedback(await r.listFeedback());
+            return f;
+          })
+        : deny('Tu rol no puede calificar recomendaciones'),
+    runAiAnalysis: (org, platform, campaignId, range) =>
+      !allowed('recommendation:run', org)
+        ? deny('Tu rol no puede ejecutar análisis')
+        : !ai.enabled
+          ? deny(ai.reason ?? 'La IA está deshabilitada')
+          : guard(async (r) => {
+              const res = await r.runAiAnalysis(org, platform, campaignId, range);
+              setRuns((rs) => [res.run, ...rs]);
+              return res;
+            }),
     demo: DEMO_MODE,
     status,
     error,
@@ -435,6 +541,9 @@ export function useScoped(org: OrganizationId | 'all', channel: Platform | 'all'
       quotes: app.quotes.filter((q) => visible(q.organizationId)),
       priceDocs: app.priceDocs.filter((d) => visible(d.organizationId)),
       members: app.members.filter((m) => visible(m.organizationId)),
+      prompts: app.prompts.filter((p) => visible(p.organizationId)),
+      runs: app.runs.filter((r) => visible(r.organizationId)),
+      feedback: app.feedback.filter((f) => visible(f.organizationId)),
     };
-  }, [app.advisors, app.campaigns, app.demo, app.integrations, app.leads, app.members, app.metricJobs, app.metrics, app.priceDocs, app.quotes, app.session, app.tasks, channel, org]);
+  }, [app.prompts, app.runs, app.feedback, app.advisors, app.campaigns, app.demo, app.integrations, app.leads, app.members, app.metricJobs, app.metrics, app.priceDocs, app.quotes, app.session, app.tasks, channel, org]);
 }

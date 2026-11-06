@@ -1,6 +1,7 @@
 import type { ImportPreview } from '../domain/leadImport';
 import type { MetricImportPreview } from '../domain/metricImport';
 import type { QuoteAction } from '../domain/quotes';
+import type { CampaignRecommendation } from '../domain/recommendations';
 import type {
   Advisor,
   Campaign,
@@ -13,7 +14,14 @@ import type {
   LeadStatus,
   Member,
   OrganizationId,
+  Platform,
   PriceDocCategory,
+  PromptAction,
+  PromptEvent,
+  PromptVersion,
+  AnalyzerName,
+  RecommendationFeedback,
+  RecommendationRun,
   PriceDocument,
   PriceRow,
   Quote,
@@ -88,6 +96,26 @@ export interface NewPriceDocumentInput {
   rows: PriceRow[];
 }
 
+export interface NewPromptDraftInput {
+  organizationId: OrganizationId;
+  name: AnalyzerName;
+  version: string;
+  promptText: string;
+  changeNote?: string;
+}
+
+export interface AiStatus {
+  enabled: boolean;
+  /** Motivo legible cuando está deshabilitada (demo, falta la clave, etc.). */
+  reason?: string;
+  model?: string;
+}
+
+export interface AiAnalysisResult {
+  run: RecommendationRun;
+  rec: CampaignRecommendation;
+}
+
 export interface Session {
   userId: string;
   userName: string;
@@ -131,5 +159,19 @@ export interface Repository {
   connectMeta(organizationId: OrganizationId, adAccountId: string): Promise<string>;
   syncMeta(organizationId: OrganizationId, range: DateRange): Promise<{ jobId: string | null; rows: number; skipped: number }>;
   disconnectIntegration(organizationId: OrganizationId, provider: Integration['provider']): Promise<void>;
+  // P3
+  listPromptVersions(): Promise<PromptVersion[]>;
+  listPromptEvents(): Promise<PromptEvent[]>;
+  createPromptDraft(input: NewPromptDraftInput): Promise<PromptVersion>;
+  updatePromptDraft(id: string, promptText: string, changeNote?: string): Promise<PromptVersion>;
+  transitionPrompt(id: string, action: PromptAction, reason?: string): Promise<PromptVersion>;
+  listRecommendationRuns(): Promise<RecommendationRun[]>;
+  /** Guarda una corrida del motor de reglas (las de IA las guarda el servidor). */
+  saveRulesRun(organizationId: OrganizationId, platform: Platform, rec: CampaignRecommendation): Promise<RecommendationRun>;
+  listFeedback(): Promise<RecommendationFeedback[]>;
+  /** Alta o cambio del feedback propio sobre una corrida. */
+  submitFeedback(runId: string, useful: boolean, comment?: string): Promise<RecommendationFeedback>;
+  aiStatus(): Promise<AiStatus>;
+  runAiAnalysis(organizationId: OrganizationId, platform: Platform, campaignId: string, range: DateRange): Promise<AiAnalysisResult>;
   resetDemo?(): Promise<void>;
 }

@@ -8,7 +8,10 @@ export type Action =
   | 'campaign:read'
   | 'campaign:import'
   | 'integration:manage'
+  | 'prompt:read'
   | 'prompt:draft'
+  | 'recommendation:run'
+  | 'recommendation:feedback'
   | 'prompt:approve'
   | 'note:write'
   | 'task:write'
@@ -31,7 +34,10 @@ const MATRIX: Record<Action, readonly Role[]> = {
   'campaign:read': ['super_admin', 'dealership_admin', 'sales_advisor', 'read_only'],
   'campaign:import': ['super_admin', 'dealership_admin'],
   'integration:manage': ['super_admin', 'dealership_admin'],
+  'prompt:read': ['super_admin', 'dealership_admin', 'sales_advisor', 'read_only'],
   'prompt:draft': ['super_admin', 'dealership_admin'],
+  'recommendation:run': ['super_admin', 'dealership_admin', 'sales_advisor'],
+  'recommendation:feedback': ['super_admin', 'dealership_admin', 'sales_advisor'],
   'prompt:approve': ['super_admin'],
   'note:write': ['super_admin', 'dealership_admin', 'sales_advisor', 'post_sales'],
   'task:write': ['super_admin', 'dealership_admin', 'sales_advisor', 'post_sales'],

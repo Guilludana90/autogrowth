@@ -6,7 +6,13 @@ import { scoreLead } from '../domain/scoring';
 import type { Advisor, Campaign, CampaignMetricsDaily, Lead, OrganizationId, Role } from '../domain/types';
 import type { QuoteAction } from '../domain/quotes';
 import type { DateRange, Integration, LeadActivity, Member, MetricImportJob, PriceDocument, Quote, Task } from '../domain/types';
+import { toRecommendationJson, type CampaignRecommendation } from '../domain/recommendations';
+import type { Platform, PromptAction } from '../domain/types';
+import { toFeedback, toPrompt, toPromptEvent, toRun, type FeedbackRow, type PromptEventRow, type PromptRow, type RunRow } from './p3Rows';
 import type {
+  AiAnalysisResult,
+  AiStatus,
+  NewPromptDraftInput,
   ImportJob,
   LeadPatch,
   NewLeadInput,
@@ -532,6 +538,112 @@ export class SupabaseRepository implements Repository {
 
   async syncMeta(organizationId: OrganizationId, range: DateRange) {
     return this.api<{ jobId: string | null; rows: number; skipped: number }>('/api/integrations/meta/sync', { organizationId, from: range.from, to: range.to });
+  }
+
+  // ───────────── P3 ─────────────
+
+  async listPromptVersions() {
+    const rows = check(await this.db.from('prompt_versions').select('*').order('created_at', { ascending: true })) as PromptRow[];
+    const names = await this.names(rows.flatMap((r) => [r.created_by, r.approved_by]));
+    return rows.map((r) => toPrompt(r, names));
+  }
+
+  async listPromptEvents() {
+    const rows = check(await this.db.from('prompt_version_events').select('*').order('created_at', { ascending: true })) as PromptEventRow[];
+    const names = await this.names(rows.map((r) => r.actor_id));
+    return rows.map((r) => toPromptEvent(r, names));
+  }
+
+  private async onePrompt(row: PromptRow) {
+    return toPrompt(row, await this.names([row.created_by, row.approved_by]));
+  }
+
+  async createPromptDraft(input: NewPromptDraftInput) {
+    const { data } = await this.db.auth.getUser();
+    if (!data.user) throw new Error('Iniciá sesión');
+    const res = await this.db
+      .from('prompt_versions')
+      .insert({
+        organization_id: input.organizationId,
+        name: input.name,
+        version: input.version,
+        prompt_text: input.promptText.trim(),
+        change_note: input.changeNote?.trim() || null,
+        created_by: data.user.id,
+      })
+      .select('*')
+      .single();
+    if (res.error?.code === '23505') throw new Error(`Ya existe la versión ${input.version}`);
+    return this.onePrompt(check(res) as PromptRow);
+  }
+
+  async updatePromptDraft(id: string, promptText: string, changeNote?: string) {
+    return this.onePrompt(check(await this.db.rpc('prompt_update_draft', { p_id: id, p_text: promptText, p_note: changeNote ?? null })) as PromptRow);
+  }
+
+  async transitionPrompt(id: string, action: PromptAction, reason?: string) {
+    return this.onePrompt(check(await this.db.rpc('prompt_transition', { p_id: id, p_action: action, p_reason: reason?.trim() || null })) as PromptRow);
+  }
+
+  async listRecommendationRuns() {
+    const rows = check(await this.db.from('recommendation_runs').select('*').order('created_at', { ascending: false }).limit(500)) as RunRow[];
+    return rows.map(toRun);
+  }
+
+  async saveRulesRun(organizationId: OrganizationId, platform: Platform, rec: CampaignRecommendation) {
+    if (rec.engine !== 'rules') throw new Error('Las corridas de IA las guarda el servidor');
+    if (!rec.window) throw new Error('Falta el período analizado');
+    const row = check(
+      await this.db
+        .from('recommendation_runs')
+        .insert({
+          organization_id: organizationId,
+          platform,
+          campaign_id: rec.campaignId,
+          window_from: rec.window.from,
+          window_to: rec.window.to,
+          engine: 'rules',
+          version: rec.version,
+          priority: rec.priority,
+          problem_area: rec.problemArea,
+          confidence: rec.confidence,
+          payload: toRecommendationJson(rec),
+        })
+        .select('*')
+        .single(),
+    ) as RunRow;
+    return toRun(row);
+  }
+
+  async listFeedback() {
+    const rows = check(await this.db.from('recommendation_feedback').select('*').order('updated_at', { ascending: false })) as FeedbackRow[];
+    const names = await this.names(rows.map((r) => r.user_id));
+    return rows.map((r) => toFeedback(r, names));
+  }
+
+  async submitFeedback(runId: string, useful: boolean, comment?: string) {
+    const { data } = await this.db.auth.getUser();
+    if (!data.user) throw new Error('Iniciá sesión');
+    const run = check(await this.db.from('recommendation_runs').select('organization_id').eq('id', runId).maybeSingle()) as { organization_id: OrganizationId } | null;
+    if (!run) throw new Error('Corrida inexistente');
+    const row = check(
+      await this.db
+        .from('recommendation_feedback')
+        .upsert({ run_id: runId, organization_id: run.organization_id, user_id: data.user.id, useful, comment: comment?.trim() || null }, { onConflict: 'run_id,user_id' })
+        .select('*')
+        .single(),
+    ) as FeedbackRow;
+    return toFeedback(row, await this.names([row.user_id]));
+  }
+
+  async aiStatus() {
+    const res = await fetch('/api/ai/status');
+    if (!res.ok) return { enabled: false, reason: `No se pudo consultar el estado de la IA (${res.status})` } satisfies AiStatus;
+    return (await res.json()) as AiStatus;
+  }
+
+  async runAiAnalysis(organizationId: OrganizationId, platform: Platform, campaignId: string, range: DateRange) {
+    return this.api<AiAnalysisResult>('/api/ai/analyze', { organizationId, platform, campaignId, from: range.from, to: range.to });
   }
 
   async disconnectIntegration(organizationId: OrganizationId, provider: Integration['provider']) {

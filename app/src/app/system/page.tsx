@@ -27,7 +27,14 @@ export default function SystemPage() {
     ['WhatsApp Business', 'P4. No se toca el WhatsApp operativo', 'No conectado', 'gray'],
     ['Tecnom', 'Solo importación CSV manual y reversible. Nunca se escribe en Tecnom', 'CSV manual', 'amber'],
     ['Documentos (Storage)', 'Las listas de precios guardan sus filas validadas; el archivo original irá a Supabase Storage privado', 'Pendiente', 'gray'],
-    ['IA generativa', 'P3. Hoy las recomendaciones usan el motor de reglas rules-v1', 'No conectado', 'gray'],
+    [
+      'IA generativa (Claude, solo servidor)',
+      app.ai.enabled
+        ? `Configurada con ${app.ai.model ?? 'modelo del servidor'}. Usa solo la versión de prompt publicada en AI Governance y recibe métricas agregadas, sin datos personales`
+        : `${app.ai.reason ?? 'Desactivada'} Respaldo: motor de reglas rules-v2`,
+      app.ai.enabled ? 'Configurada · sin prueba registrada' : 'No conectado',
+      app.ai.enabled ? 'amber' : 'gray',
+    ],
   ];
   return (
     <>
