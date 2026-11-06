@@ -2,7 +2,19 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ImportPreview } from '../domain/leadImport';
 import { scoreLead } from '../domain/scoring';
 import type { Advisor, Campaign, CampaignMetricsDaily, Lead, OrganizationId, Role } from '../domain/types';
-import type { ImportJob, LeadPatch, NewLeadInput, Repository, Session } from './repository';
+import type { QuoteAction } from '../domain/quotes';
+import type { LeadActivity, Member, PriceDocument, Quote, Task } from '../domain/types';
+import type {
+  ImportJob,
+  LeadPatch,
+  NewLeadInput,
+  NewPriceDocumentInput,
+  NewQuoteInput,
+  NewTaskInput,
+  Repository,
+  Session,
+  TaskPatch,
+} from './repository';
 
 /* Filas tal como vienen de Postgres (snake_case). */
 interface LeadRow {
@@ -77,6 +89,7 @@ export class SupabaseRepository implements Repository {
       full_name: string;
     } | null;
     return {
+      userId: data.user.id,
       userName: profile?.full_name || data.user.email || 'Usuario',
       roles: Object.fromEntries(memberships.map((m) => [m.organization_id, m.role])),
     };
@@ -239,4 +252,222 @@ export class SupabaseRepository implements Repository {
       platformLeads: r.platform_leads,
     }));
   }
+
+  // ───────────── P1 ─────────────
+
+  private async names(ids: Array<string | null | undefined>): Promise<Map<string, string>> {
+    const unique = [...new Set(ids.filter((x): x is string => !!x))];
+    if (!unique.length) return new Map();
+    const rows = check(await this.db.from('profiles').select('id, full_name, email').in('id', unique)) as Array<{ id: string; full_name: string; email: string | null }>;
+    return new Map(rows.map((r) => [r.id, r.full_name || r.email || 'Usuario']));
+  }
+
+  async listActivities(leadId: string) {
+    const rows = check(
+      await this.db.from('lead_activities').select('*').eq('lead_id', leadId).order('created_at', { ascending: false }).limit(200),
+    ) as Array<{ id: string; organization_id: OrganizationId; lead_id: string; kind: LeadActivity['kind']; body: string; actor_id: string | null; created_at: string }>;
+    const names = await this.names(rows.map((r) => r.actor_id));
+    return rows.map<LeadActivity>((r) => ({
+      id: r.id,
+      organizationId: r.organization_id,
+      leadId: r.lead_id,
+      kind: r.kind,
+      body: r.body,
+      actorName: r.actor_id ? names.get(r.actor_id) : undefined,
+      createdAt: r.created_at,
+    }));
+  }
+
+  async addNote(leadId: string, body: string) {
+    const { data } = await this.db.auth.getUser();
+    const lead = check(await this.db.from('leads').select('organization_id').eq('id', leadId).single()) as { organization_id: OrganizationId };
+    const row = check(
+      await this.db
+        .from('lead_activities')
+        .insert({ organization_id: lead.organization_id, lead_id: leadId, kind: 'note', body: body.trim(), actor_id: data.user?.id })
+        .select('*')
+        .single(),
+    ) as { id: string; created_at: string };
+    return { id: row.id, organizationId: lead.organization_id, leadId, kind: 'note' as const, body: body.trim(), createdAt: row.created_at };
+  }
+
+  async listTasks() {
+    const rows = check(await this.db.from('tasks').select('*').order('due_at', { ascending: true, nullsFirst: false })) as Array<{
+      id: string; organization_id: OrganizationId; lead_id: string | null; title: string; notes: string | null; priority: Task['priority'];
+      status: Task['status']; due_at: string | null; assignee_id: string | null; created_at: string; completed_at: string | null;
+    }>;
+    return rows.map<Task>((r) => ({
+      id: r.id,
+      organizationId: r.organization_id,
+      leadId: r.lead_id ?? undefined,
+      title: r.title,
+      notes: r.notes ?? undefined,
+      priority: r.priority,
+      status: r.status,
+      dueAt: r.due_at ?? undefined,
+      assigneeId: r.assignee_id ?? undefined,
+      createdAt: r.created_at,
+      completedAt: r.completed_at ?? undefined,
+    }));
+  }
+
+  async createTask(input: NewTaskInput) {
+    const row = check(
+      await this.db.from('tasks').insert({
+        organization_id: input.organizationId,
+        lead_id: input.leadId ?? null,
+        title: input.title.trim(),
+        notes: input.notes ?? null,
+        priority: input.priority,
+        due_at: input.dueAt ?? null,
+        assignee_id: input.assigneeId ?? null,
+      }).select('id').single(),
+    ) as { id: string };
+    return (await this.listTasks()).find((t) => t.id === row.id)!;
+  }
+
+  async updateTask(id: string, patch: TaskPatch) {
+    const update: Record<string, unknown> = {};
+    if (patch.status !== undefined) update.status = patch.status;
+    if (patch.priority !== undefined) update.priority = patch.priority;
+    if (patch.assigneeId !== undefined) update.assignee_id = patch.assigneeId;
+    if (patch.dueAt !== undefined) update.due_at = patch.dueAt;
+    const row = check(await this.db.from('tasks').update(update).eq('id', id).select('id').maybeSingle());
+    if (!row) throw new Error('No tenés permiso para modificar esta tarea');
+    return (await this.listTasks()).find((t) => t.id === id)!;
+  }
+
+  private async toQuotes(rows: QuoteRow[]): Promise<Quote[]> {
+    const names = await this.names(rows.flatMap((r) => [r.created_by, r.decided_by]));
+    return rows.map((r) => ({
+      id: r.id,
+      organizationId: r.organization_id,
+      number: r.number,
+      leadId: r.lead_id ?? undefined,
+      kind: r.kind,
+      vehicle: r.vehicle,
+      input: r.input,
+      result: r.result,
+      priceDocumentId: r.price_document_id ?? undefined,
+      status: r.status,
+      validUntil: r.valid_until,
+      createdBy: r.created_by,
+      createdByName: names.get(r.created_by),
+      decidedByName: r.decided_by ? names.get(r.decided_by) : undefined,
+      decidedAt: r.decided_at ?? undefined,
+      decidedReason: r.decided_reason ?? undefined,
+      createdAt: r.created_at,
+    }));
+  }
+
+  async listQuotes() {
+    return this.toQuotes(check(await this.db.from('quotes').select('*').order('created_at', { ascending: false })) as QuoteRow[]);
+  }
+
+  async createQuote(input: NewQuoteInput) {
+    const row = check(
+      await this.db
+        .from('quotes')
+        .insert({
+          organization_id: input.organizationId,
+          lead_id: input.leadId ?? null,
+          kind: input.kind,
+          vehicle: input.vehicle.trim(),
+          input: input.input,
+          result: input.result,
+          price_document_id: input.priceDocumentId ?? null,
+        })
+        .select('*')
+        .single(),
+    ) as QuoteRow;
+    return (await this.toQuotes([row]))[0]!;
+  }
+
+  async transitionQuote(id: string, action: QuoteAction, reason?: string) {
+    const row = check(await this.db.rpc('quote_transition', { p_id: id, p_action: action, p_reason: reason ?? null })) as QuoteRow;
+    return (await this.toQuotes([row]))[0]!;
+  }
+
+  async listPriceDocuments() {
+    const rows = check(await this.db.from('price_documents').select('*').order('valid_from', { ascending: false })) as Array<{
+      id: string; organization_id: OrganizationId; category: PriceDocument['category']; title: string; file_name: string;
+      valid_from: string; valid_to: string | null; rows: PriceDocument['rows']; status: PriceDocument['status']; created_at: string;
+    }>;
+    return rows.map<PriceDocument>((r) => ({
+      id: r.id,
+      organizationId: r.organization_id,
+      category: r.category,
+      title: r.title,
+      fileName: r.file_name,
+      validFrom: r.valid_from,
+      validTo: r.valid_to ?? undefined,
+      rows: r.rows,
+      status: r.status,
+      createdAt: r.created_at,
+    }));
+  }
+
+  async createPriceDocument(input: NewPriceDocumentInput) {
+    const row = check(
+      await this.db
+        .from('price_documents')
+        .insert({
+          organization_id: input.organizationId,
+          category: input.category,
+          title: input.title.trim(),
+          file_name: input.fileName,
+          valid_from: input.validFrom,
+          valid_to: input.validTo ?? null,
+          rows: input.rows,
+        })
+        .select('id')
+        .single(),
+    ) as { id: string };
+    return (await this.listPriceDocuments()).find((d) => d.id === row.id)!;
+  }
+
+  async activatePriceDocument(id: string) {
+    check(await this.db.rpc('activate_price_document', { p_id: id }));
+    return (await this.listPriceDocuments()).find((d) => d.id === id)!;
+  }
+
+  async listMembers() {
+    const rows = check(await this.db.from('memberships').select('organization_id, user_id, role')) as Array<{ organization_id: OrganizationId; user_id: string; role: Role }>;
+    const profiles = rows.length
+      ? (check(await this.db.from('profiles').select('id, full_name, email').in('id', [...new Set(rows.map((r) => r.user_id))])) as Array<{ id: string; full_name: string; email: string | null }>)
+      : [];
+    return rows.map<Member>((r) => {
+      const p = profiles.find((x) => x.id === r.user_id);
+      return { userId: r.user_id, name: p?.full_name || p?.email || 'Sin nombre', email: p?.email ?? undefined, organizationId: r.organization_id, role: r.role };
+    });
+  }
+
+  async addMember(organizationId: OrganizationId, email: string, role: Role) {
+    check(await this.db.rpc('add_member_by_email', { p_org: organizationId, p_email: email, p_role: role }));
+    const members = await this.listMembers();
+    return members.find((m) => m.organizationId === organizationId && m.email?.toLowerCase() === email.trim().toLowerCase())!;
+  }
+
+  async removeMember(organizationId: OrganizationId, userId: string) {
+    check(await this.db.from('memberships').delete().eq('organization_id', organizationId).eq('user_id', userId));
+  }
+}
+
+interface QuoteRow {
+  id: string;
+  organization_id: OrganizationId;
+  number: number;
+  lead_id: string | null;
+  kind: Quote['kind'];
+  vehicle: string;
+  input: Quote['input'];
+  result: Quote['result'];
+  price_document_id: string | null;
+  status: Quote['status'];
+  valid_until: string;
+  created_by: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  decided_reason: string | null;
+  created_at: string;
 }

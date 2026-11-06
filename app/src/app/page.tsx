@@ -8,6 +8,7 @@ import { PageHead, ScoreBadge, Stat, StatusTag } from '@/components/ui';
 import { formatDay, inRange } from '@/lib/domain/dates';
 import { crmFunnel, derive, formatMoney, formatNumber, formatPercent, metricsInRange, sumMetrics } from '@/lib/domain/metrics';
 import { analyzeCampaign } from '@/lib/domain/recommendations';
+import { taskCounts } from '@/lib/domain/tasks';
 import { orgName } from '@/lib/domain/types';
 import { useScoped } from '@/lib/state/AppContext';
 import { useFilters } from '@/lib/state/filters';
@@ -16,7 +17,9 @@ const PRIORITY_RANK = { high: 0, medium: 1, low: 2 } as const;
 
 export default function CommandCenter() {
   const { org, range, hrefWithFilters } = useFilters();
-  const { leads, campaigns, metrics } = useScoped(org);
+  const { leads, campaigns, metrics, tasks, quotes } = useScoped(org);
+  const tc = taskCounts(tasks);
+  const pendingQuotes = quotes.filter((q) => q.status === 'pending_approval').length;
 
   const view = useMemo(() => {
     const rows = metricsInRange(metrics, range);
@@ -118,6 +121,14 @@ export default function CommandCenter() {
             </li>
             <li>
               <b>{view.leadsInRange.filter((l) => !l.phoneE164).length}</b> leads sin teléfono válido.
+            </li>
+            <li>
+              <b className={tc.overdue ? 'due-overdue' : undefined}>{tc.overdue}</b> tareas vencidas y <b>{tc.today}</b> para hoy.{' '}
+              <Link className="star" href={hrefWithFilters('/tasks')}>Ver tareas →</Link>
+            </li>
+            <li>
+              <b>{pendingQuotes}</b> cotizaciones esperando aprobación de gerencia.{' '}
+              {pendingQuotes > 0 && <Link className="star" href={hrefWithFilters('/quotes')}>Revisar →</Link>}
             </li>
           </ul>
         </section>

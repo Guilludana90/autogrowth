@@ -16,9 +16,9 @@ export const NAV: NavGroup[] = [
     items: [
       { label: 'Leads & CRM', href: '/leads' },
       { label: 'Pipeline', href: '/pipeline' },
-      { label: 'Seguimientos y tareas', phase: 'P1' },
-      { label: 'Cotizadores', phase: 'P1' },
-      { label: 'Documentos y acuerdos', phase: 'P1' },
+      { label: 'Seguimientos y tareas', href: '/tasks' },
+      { label: 'Cotizadores', href: '/quotes' },
+      { label: 'Documentos y precios', href: '/documents' },
       { label: 'Inbox de conversaciones', phase: 'P4' },
     ],
   },
@@ -41,7 +41,7 @@ export const NAV: NavGroup[] = [
     label: 'Configuración',
     items: [
       { label: 'Estado del sistema', href: '/system' },
-      { label: 'Usuarios y roles', phase: 'P1' },
+      { label: 'Usuarios y roles', href: '/users' },
       { label: 'AI Governance', phase: 'P3' },
       { label: 'Canales conectados', phase: 'P2' },
     ],
@@ -54,5 +54,10 @@ export const PAGE_TITLE: Record<string, string> = {
   '/pipeline': 'Pipeline',
   '/campaigns': 'Campaign Intelligence',
   '/system': 'Estado del sistema',
+  '/tasks': 'Seguimientos y tareas',
+  '/quotes': 'Cotizadores',
+  '/quotes/view': 'Propuesta',
+  '/documents': 'Documentos y precios',
+  '/users': 'Usuarios y roles',
   '/login': 'Ingresar',
 };

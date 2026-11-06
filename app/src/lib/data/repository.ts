@@ -1,5 +1,24 @@
 import type { ImportPreview } from '../domain/leadImport';
-import type { Advisor, Campaign, CampaignMetricsDaily, Lead, LeadStatus, OrganizationId, Role } from '../domain/types';
+import type { QuoteAction } from '../domain/quotes';
+import type {
+  Advisor,
+  Campaign,
+  CampaignMetricsDaily,
+  Lead,
+  LeadActivity,
+  LeadStatus,
+  Member,
+  OrganizationId,
+  PriceDocCategory,
+  PriceDocument,
+  PriceRow,
+  Quote,
+  QuoteKind,
+  Role,
+  Task,
+  TaskPriority,
+  TaskStatus,
+} from '../domain/types';
 
 export interface NewLeadInput {
   organizationId: OrganizationId;
@@ -28,7 +47,45 @@ export interface ImportJob {
   rolledBack: boolean;
 }
 
+export interface NewTaskInput {
+  organizationId: OrganizationId;
+  leadId?: string;
+  title: string;
+  notes?: string;
+  priority: TaskPriority;
+  dueAt?: string;
+  assigneeId?: string;
+}
+
+export interface TaskPatch {
+  status?: TaskStatus;
+  assigneeId?: string | null;
+  dueAt?: string | null;
+  priority?: TaskPriority;
+}
+
+export interface NewQuoteInput {
+  organizationId: OrganizationId;
+  leadId?: string;
+  kind: QuoteKind;
+  vehicle: string;
+  input: Record<string, number | string>;
+  result: Record<string, number | undefined>;
+  priceDocumentId?: string;
+}
+
+export interface NewPriceDocumentInput {
+  organizationId: OrganizationId;
+  category: PriceDocCategory;
+  title: string;
+  fileName: string;
+  validFrom: string;
+  validTo?: string;
+  rows: PriceRow[];
+}
+
 export interface Session {
+  userId: string;
   userName: string;
   /** Rol por organización. En demo se elige desde el header. */
   roles: Partial<Record<OrganizationId, Role>>;
@@ -46,5 +103,20 @@ export interface Repository {
   listAdvisors(): Promise<Advisor[]>;
   listCampaigns(): Promise<Campaign[]>;
   listMetrics(): Promise<CampaignMetricsDaily[]>;
+  // P1
+  listActivities(leadId: string): Promise<LeadActivity[]>;
+  addNote(leadId: string, body: string): Promise<LeadActivity>;
+  listTasks(): Promise<Task[]>;
+  createTask(input: NewTaskInput): Promise<Task>;
+  updateTask(id: string, patch: TaskPatch): Promise<Task>;
+  listQuotes(): Promise<Quote[]>;
+  createQuote(input: NewQuoteInput): Promise<Quote>;
+  transitionQuote(id: string, action: QuoteAction, reason?: string): Promise<Quote>;
+  listPriceDocuments(): Promise<PriceDocument[]>;
+  createPriceDocument(input: NewPriceDocumentInput): Promise<PriceDocument>;
+  activatePriceDocument(id: string): Promise<PriceDocument>;
+  listMembers(): Promise<Member[]>;
+  addMember(organizationId: OrganizationId, email: string, role: Role): Promise<Member>;
+  removeMember(organizationId: OrganizationId, userId: string): Promise<void>;
   resetDemo?(): Promise<void>;
 }

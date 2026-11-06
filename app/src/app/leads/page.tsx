@@ -3,6 +3,7 @@
 import { useSearchParams } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { ImportDialog } from '@/components/ImportDialog';
+import { LeadDrawer } from '@/components/LeadDrawer';
 import { LeadFormDialog } from '@/components/LeadFormDialog';
 import { downloadFile, PageHead, ScoreBadge, StatusTag } from '@/components/ui';
 import { useStatusChange } from '@/components/useStatusChange';
@@ -26,6 +27,7 @@ export default function LeadsPage() {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'createdAt', dir: -1 });
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [openLead, setOpenLead] = useState<Lead | null>(null);
   const { change, dialog } = useStatusChange();
 
   const rows = useMemo(() => {
@@ -118,7 +120,7 @@ export default function LeadsPage() {
             </thead>
             <tbody>
               {rows.map((l) => (
-                <LeadRow key={l.id} lead={l} advisorName={advisorName} onStatus={change} />
+                <LeadRow key={l.id} lead={l} advisorName={advisorName} onStatus={change} onOpen={setOpenLead} />
               ))}
             </tbody>
           </table>
@@ -169,11 +171,12 @@ export default function LeadsPage() {
       {creating && <LeadFormDialog open onClose={() => setCreating(false)} defaultOrg={org === 'all' ? undefined : org} />}
       {importing && <ImportDialog open onClose={() => setImporting(false)} org={org} />}
       {dialog}
+      <LeadDrawer lead={openLead} onClose={() => setOpenLead(null)} />
     </>
   );
 }
 
-function LeadRow({ lead: l, advisorName, onStatus }: { lead: Lead; advisorName: (id?: string) => string; onStatus: (l: Lead, s: Lead['status']) => void }) {
+function LeadRow({ lead: l, advisorName, onStatus, onOpen }: { lead: Lead; advisorName: (id?: string) => string; onStatus: (l: Lead, s: Lead['status']) => void; onOpen: (l: Lead) => void }) {
   const app = useApp();
   const { advisors } = useScoped(l.organizationId);
   const canWrite = app.allowed('lead:write', l.organizationId);
@@ -181,7 +184,7 @@ function LeadRow({ lead: l, advisorName, onStatus }: { lead: Lead; advisorName: 
   return (
     <tr>
       <td>
-        <strong>{l.name}</strong>
+        <button className="linklike" onClick={() => onOpen(l)} aria-label={`Abrir ficha de ${l.name}`}>{l.name}</button>
         <div className="faint">{formatArPhone(l.phoneE164)}{l.email ? ` · ${l.email}` : ''}</div>
       </td>
       <td>{orgName(l.organizationId)}</td>
