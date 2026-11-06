@@ -19,7 +19,7 @@ export const NAV: NavGroup[] = [
       { label: 'Seguimientos y tareas', href: '/tasks' },
       { label: 'Cotizadores', href: '/quotes' },
       { label: 'Documentos y precios', href: '/documents' },
-      { label: 'Inbox de conversaciones', phase: 'P4' },
+      { label: 'Inbox de conversaciones', href: '/inbox' },
     ],
   },
   {
@@ -33,12 +33,19 @@ export const NAV: NavGroup[] = [
     label: 'AI Intelligence',
     items: [
       { label: 'AI Growth Recommendations', href: '/recommendations' },
-      { label: 'Resúmenes de conversaciones', phase: 'P4' },
+      { label: 'Resúmenes de conversaciones', phase: 'Pend.' },
       { label: 'Oportunidades detectadas', href: '/opportunities' },
       { label: 'Alertas de datos faltantes', href: '/data-alerts' },
     ],
   },
-  { label: 'Postventa y repuestos', items: [{ label: 'Turnos de taller', phase: 'P4' }, { label: 'Repuestos y accesorios', phase: 'P4' }] },
+  {
+    label: 'Postventa y repuestos',
+    items: [
+      { label: 'Turnos de taller', href: '/service' },
+      { label: 'Repuestos y accesorios', href: '/parts' },
+      { label: 'Base de conocimiento', href: '/knowledge' },
+    ],
+  },
   {
     label: 'Configuración',
     items: [
@@ -68,5 +75,9 @@ export const PAGE_TITLE: Record<string, string> = {
   '/opportunities': 'Oportunidades detectadas',
   '/data-alerts': 'Alertas de datos faltantes',
   '/governance': 'AI Governance',
+  '/service': 'Turnos de taller',
+  '/parts': 'Repuestos y accesorios',
+  '/knowledge': 'Base de conocimiento',
+  '/inbox': 'Inbox de conversaciones',
   '/login': 'Ingresar',
 };

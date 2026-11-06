@@ -8,8 +8,14 @@ import type {
   NewPromptDraftInput,
   ImportJob,
   LeadPatch,
+  NewAppointmentInput,
+  NewConsentInput,
+  NewKnowledgeInput,
   NewLeadInput,
+  NewMessageInput,
+  NewPartsInput,
   NewPriceDocumentInput,
+  PartsStepInput,
   NewQuoteInput,
   NewTaskInput,
   Repository,
@@ -22,8 +28,15 @@ import { byChannel, leadsByChannel } from '../domain/reconcile';
 import { can, grantableRoles, type Action } from '../domain/permissions';
 import { canTransition, type QuoteAction } from '../domain/quotes';
 import { canPrompt } from '../domain/governance';
+import { appointmentActions, canKnowledge, outboundCheck, partsActions, reminderTask, type AppointmentAction, type KnowledgeAction, type PartsAction } from '../domain/postventa';
 import type { CampaignRecommendation } from '../domain/recommendations';
 import type {
+  AppointmentEvent,
+  ConsentEvent,
+  ConversationMessage,
+  KnowledgeArticle,
+  PartsRequest,
+  ServiceAppointment,
   Advisor,
   Campaign,
   CampaignMetricsDaily,
@@ -74,6 +87,23 @@ interface AppState {
   runs: RecommendationRun[];
   feedback: RecommendationFeedback[];
   ai: AiStatus;
+  appointments: ServiceAppointment[];
+  appointmentEvents: AppointmentEvent[];
+  parts: PartsRequest[];
+  knowledge: KnowledgeArticle[];
+  consents: ConsentEvent[];
+  messages: ConversationMessage[];
+  /** Crea el turno y, si se pide, una tarea interna de recordatorio 24 h antes (no se envía nada al cliente). */
+  createAppointment: (input: NewAppointmentInput, withReminder: boolean) => Promise<ServiceAppointment>;
+  transitionAppointment: (a: ServiceAppointment, action: AppointmentAction, reason?: string) => Promise<ServiceAppointment>;
+  createPartsRequest: (input: NewPartsInput) => Promise<PartsRequest>;
+  transitionParts: (p: PartsRequest, action: PartsAction, step: PartsStepInput) => Promise<PartsRequest>;
+  canKnowledgeAction: (a: KnowledgeArticle, action: KnowledgeAction) => boolean;
+  createKnowledgeDraft: (input: NewKnowledgeInput) => Promise<KnowledgeArticle>;
+  updateKnowledgeDraft: (a: KnowledgeArticle, patch: Pick<KnowledgeArticle, 'title' | 'body' | 'validFrom' | 'validTo'>) => Promise<KnowledgeArticle>;
+  transitionKnowledge: (a: KnowledgeArticle, action: KnowledgeAction, note?: string) => Promise<KnowledgeArticle>;
+  recordConsent: (input: NewConsentInput) => Promise<ConsentEvent>;
+  logMessage: (input: NewMessageInput) => Promise<ConversationMessage>;
   /** Rol elegido en el selector de la demo (solo DEMO_MODE). */
   demoRole: Role;
   setDemoRole: (r: Role) => void;
@@ -139,6 +169,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [promptEvents, setPromptEvents] = useState<PromptEvent[]>([]);
   const [runs, setRuns] = useState<RecommendationRun[]>([]);
   const [feedback, setFeedback] = useState<RecommendationFeedback[]>([]);
+  const [appointments, setAppointments] = useState<ServiceAppointment[]>([]);
+  const [appointmentEvents, setAppointmentEvents] = useState<AppointmentEvent[]>([]);
+  const [parts, setParts] = useState<PartsRequest[]>([]);
+  const [knowledge, setKnowledge] = useState<KnowledgeArticle[]>([]);
+  const [consents, setConsents] = useState<ConsentEvent[]>([]);
+  const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [ai, setAi] = useState<AiStatus>({ enabled: false, reason: 'Consultando…' });
   const [demoRole, setDemoRoleState] = useState<Role>('super_admin');
   const [activityVersion, setActivityVersion] = useState(0);
@@ -178,6 +214,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
         r.listFeedback(),
         r.aiStatus().catch((e: unknown) => ({ enabled: false, reason: e instanceof Error ? e.message : String(e) })),
       ]);
+      const [ap, ae, pr, kb, cs, ms] = await Promise.all([
+        r.listAppointments(),
+        r.listAppointmentEvents(),
+        r.listParts(),
+        r.listKnowledge(),
+        r.listConsents(),
+        r.listMessages(),
+      ]);
+      setAppointments(ap);
+      setAppointmentEvents(ae);
+      setParts(pr);
+      setKnowledge(kb);
+      setConsents(cs);
+      setMessages(ms);
       setPrompts(pv);
       setPromptEvents(pe);
       setRuns(rr);
@@ -278,7 +328,110 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setPromptEvents(pe);
   };
 
+  const refreshAppointments = async (r: Repository) => {
+    const [ap, ae] = await Promise.all([r.listAppointments(), r.listAppointmentEvents()]);
+    setAppointments(ap);
+    setAppointmentEvents(ae);
+  };
+
+  const canKnowledgeAction = useCallback(
+    (a: KnowledgeArticle, action: KnowledgeAction) => canKnowledge(action, a.status, roleFor(a.organizationId), a.createdBy === session?.userId),
+    [roleFor, session],
+  );
+
   const value: AppState = {
+    appointments,
+    appointmentEvents,
+    parts,
+    knowledge,
+    consents,
+    messages,
+    canKnowledgeAction,
+    createAppointment: (input, withReminder) =>
+      allowed('service:manage', input.organizationId)
+        ? guard(async (r) => {
+            const a = await r.createAppointment(input);
+            await refreshAppointments(r);
+            if (withReminder && allowed('task:write', a.organizationId)) {
+              const rt = reminderTask(a, new Date());
+              await r.createTask({ organizationId: a.organizationId, leadId: a.leadId, title: rt.title, priority: 'normal', dueAt: rt.dueAt, assigneeId: a.advisorId });
+              setTasks(await r.listTasks());
+            }
+            bump();
+            return a;
+          })
+        : deny('Solo Super Admin, Gerente o Postventa agendan turnos'),
+    transitionAppointment: (a, action, reason) =>
+      allowed('service:manage', a.organizationId) && appointmentActions(a, new Date()).includes(action)
+        ? guard(async (r) => {
+            const next = await r.transitionAppointment(a.id, action, reason);
+            await refreshAppointments(r);
+            bump();
+            return next;
+          })
+        : deny('Esa acción no está disponible para este turno o tu rol'),
+    createPartsRequest: (input) =>
+      allowed('parts:request', input.organizationId)
+        ? guard(async (r) => {
+            const p = await r.createPartsRequest(input);
+            setParts(await r.listParts());
+            return p;
+          })
+        : deny('Tu rol no puede pedir repuestos'),
+    transitionParts: (p, action, step) =>
+      allowed('parts:manage', p.organizationId) && partsActions(p).includes(action)
+        ? guard(async (r) => {
+            const next = await r.transitionParts(p.id, action, step);
+            setParts(await r.listParts());
+            return next;
+          })
+        : deny('Solo Super Admin, Gerente o Postventa gestionan pedidos'),
+    createKnowledgeDraft: (input) =>
+      allowed('knowledge:edit', input.organizationId)
+        ? guard(async (r) => {
+            const a = await r.createKnowledgeDraft(input);
+            setKnowledge(await r.listKnowledge());
+            return a;
+          })
+        : deny('Tu rol no puede escribir artículos'),
+    updateKnowledgeDraft: (a, patch) =>
+      a.status === 'draft' && a.createdBy === session?.userId
+        ? guard(async (r) => {
+            const next = await r.updateKnowledgeDraft(a.id, patch);
+            setKnowledge(await r.listKnowledge());
+            return next;
+          })
+        : deny('Solo el autor edita su borrador'),
+    transitionKnowledge: (a, action, note) =>
+      canKnowledgeAction(a, action)
+        ? guard(async (r) => {
+            const next = await r.transitionKnowledge(a.id, action, note);
+            setKnowledge(await r.listKnowledge());
+            return next;
+          })
+        : deny(action === 'submit' ? 'Solo el autor envía su borrador a revisión' : 'Solo Super Admin o Gerente aprueban, y nunca lo que escribieron'),
+    recordConsent: (input) =>
+      allowed('conversation:log', input.organizationId)
+        ? guard(async (r) => {
+            const c = await r.recordConsent(input);
+            setConsents(await r.listConsents());
+            bump();
+            return c;
+          })
+        : deny('Tu rol no puede registrar consentimientos'),
+    logMessage: (input) => {
+      if (!allowed('conversation:log', input.organizationId)) return deny('Tu rol no puede registrar conversaciones');
+      if (input.direction === 'out') {
+        const chk = outboundCheck(input.channel, input.leadId, consents, messages, new Date(input.occurredAt));
+        if (!chk.ok) return deny(chk.reason);
+      }
+      return guard(async (r) => {
+        const m = await r.logMessage(input);
+        setMessages(await r.listMessages());
+        bump();
+        return m;
+      });
+    },
     prompts,
     promptEvents,
     runs,
@@ -544,6 +697,11 @@ export function useScoped(org: OrganizationId | 'all', channel: Platform | 'all'
       prompts: app.prompts.filter((p) => visible(p.organizationId)),
       runs: app.runs.filter((r) => visible(r.organizationId)),
       feedback: app.feedback.filter((f) => visible(f.organizationId)),
+      appointments: app.appointments.filter((a) => visible(a.organizationId)),
+      parts: app.parts.filter((p) => visible(p.organizationId)),
+      knowledge: app.knowledge.filter((k) => visible(k.organizationId)),
+      consents: app.consents.filter((c) => visible(c.organizationId)),
+      messages: app.messages.filter((m) => visible(m.organizationId)),
     };
-  }, [app.prompts, app.runs, app.feedback, app.advisors, app.campaigns, app.demo, app.integrations, app.leads, app.members, app.metricJobs, app.metrics, app.priceDocs, app.quotes, app.session, app.tasks, channel, org]);
+  }, [app.appointments, app.parts, app.knowledge, app.consents, app.messages, app.prompts, app.runs, app.feedback, app.advisors, app.campaigns, app.demo, app.integrations, app.leads, app.members, app.metricJobs, app.metrics, app.priceDocs, app.quotes, app.session, app.tasks, channel, org]);
 }

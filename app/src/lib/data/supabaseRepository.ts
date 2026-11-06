@@ -8,11 +8,34 @@ import type { QuoteAction } from '../domain/quotes';
 import type { DateRange, Integration, LeadActivity, Member, MetricImportJob, PriceDocument, Quote, Task } from '../domain/types';
 import { toRecommendationJson, type CampaignRecommendation } from '../domain/recommendations';
 import type { Platform, PromptAction } from '../domain/types';
+import type { AppointmentAction, KnowledgeAction, PartsAction } from '../domain/postventa';
+import { normalizePlate } from '../domain/postventa';
+import type { KnowledgeArticle } from '../domain/types';
+import {
+  toAppointment,
+  toAppointmentEvent,
+  toConsent,
+  toKnowledge,
+  toMessage,
+  toParts,
+  type AppointmentEventRow,
+  type AppointmentRow,
+  type ConsentRow,
+  type KnowledgeRow,
+  type MessageRow,
+  type PartsRow,
+} from './p4Rows';
 import { toFeedback, toPrompt, toPromptEvent, toRun, type FeedbackRow, type PromptEventRow, type PromptRow, type RunRow } from './p3Rows';
 import type {
   AiAnalysisResult,
   AiStatus,
   NewPromptDraftInput,
+  NewAppointmentInput,
+  NewConsentInput,
+  NewKnowledgeInput,
+  NewMessageInput,
+  NewPartsInput,
+  PartsStepInput,
   ImportJob,
   LeadPatch,
   NewLeadInput,
@@ -640,6 +663,166 @@ export class SupabaseRepository implements Repository {
     const res = await fetch('/api/ai/status');
     if (!res.ok) return { enabled: false, reason: `No se pudo consultar el estado de la IA (${res.status})` } satisfies AiStatus;
     return (await res.json()) as AiStatus;
+  }
+
+  // ───────────── P4 ─────────────
+
+  private async uid() {
+    const { data } = await this.db.auth.getUser();
+    if (!data.user) throw new Error('Iniciá sesión');
+    return data.user.id;
+  }
+
+  async listAppointments() {
+    return (check(await this.db.from('service_appointments').select('*').order('scheduled_at')) as AppointmentRow[]).map(toAppointment);
+  }
+
+  async listAppointmentEvents() {
+    const rows = check(await this.db.from('appointment_events').select('*').order('created_at')) as AppointmentEventRow[];
+    const names = await this.names(rows.map((r) => r.actor_id));
+    return rows.map((r) => toAppointmentEvent(r, names));
+  }
+
+  async createAppointment(input: NewAppointmentInput) {
+    const created_by = await this.uid();
+    const res = await this.db
+      .from('service_appointments')
+      .insert({
+        organization_id: input.organizationId,
+        lead_id: input.leadId ?? null,
+        customer_name: input.customerName.trim(),
+        phone_e164: input.phoneE164 ?? null,
+        vehicle: input.vehicle.trim(),
+        plate: normalizePlate(input.plate) ?? null,
+        mileage: input.mileage ?? null,
+        service_type: input.serviceType,
+        scheduled_at: input.scheduledAt,
+        duration_min: input.durationMin,
+        bay: input.bay.trim(),
+        advisor_id: input.advisorId ?? null,
+        notes: input.notes?.trim() || null,
+        created_by,
+      })
+      .select('*')
+      .single();
+    return toAppointment(check(res) as AppointmentRow);
+  }
+
+  async transitionAppointment(id: string, action: AppointmentAction, reason?: string) {
+    return toAppointment(check(await this.db.rpc('appointment_transition', { p_id: id, p_action: action, p_reason: reason?.trim() || null })) as AppointmentRow);
+  }
+
+  async listParts() {
+    return (check(await this.db.from('parts_requests').select('*').order('created_at', { ascending: false })) as PartsRow[]).map(toParts);
+  }
+
+  async createPartsRequest(input: NewPartsInput) {
+    const created_by = await this.uid();
+    const res = await this.db
+      .from('parts_requests')
+      .insert({
+        organization_id: input.organizationId,
+        kind: input.kind,
+        appointment_id: input.appointmentId ?? null,
+        lead_id: input.leadId ?? null,
+        customer_name: input.customerName.trim(),
+        part_number: input.partNumber?.trim() || null,
+        description: input.description.trim(),
+        quantity: input.quantity,
+        notes: input.notes?.trim() || null,
+        created_by,
+      })
+      .select('*')
+      .single();
+    return toParts(check(res) as PartsRow);
+  }
+
+  async transitionParts(id: string, action: PartsAction, step: PartsStepInput) {
+    return toParts(
+      check(await this.db.rpc('parts_transition', { p_id: id, p_action: action, p_unit_price: step.unitPrice ?? null, p_eta: step.eta ?? null, p_reason: step.reason?.trim() || null })) as PartsRow,
+    );
+  }
+
+  async listKnowledge() {
+    const rows = check(await this.db.from('knowledge_articles').select('*').order('created_at')) as KnowledgeRow[];
+    const names = await this.names(rows.flatMap((r) => [r.created_by, r.approved_by]));
+    return rows.map((r) => toKnowledge(r, names));
+  }
+
+  private async oneKnowledge(row: KnowledgeRow) {
+    return toKnowledge(row, await this.names([row.created_by, row.approved_by]));
+  }
+
+  async createKnowledgeDraft(input: NewKnowledgeInput) {
+    const created_by = await this.uid();
+    const prev = check(
+      await this.db.from('knowledge_articles').select('version').eq('organization_id', input.organizationId).eq('article_key', input.articleKey).order('version', { ascending: false }).limit(1),
+    ) as Array<{ version: number }>;
+    const res = await this.db
+      .from('knowledge_articles')
+      .insert({
+        organization_id: input.organizationId,
+        article_key: input.articleKey,
+        version: (prev[0]?.version ?? 0) + 1,
+        title: input.title.trim(),
+        body: input.body.trim(),
+        language: input.language,
+        category: input.category,
+        model: input.model?.trim() || null,
+        valid_from: input.validFrom,
+        valid_to: input.validTo ?? null,
+        created_by,
+      })
+      .select('*')
+      .single();
+    if (res.error?.code === '23505') throw new Error('Otra persona creó una versión de este artículo al mismo tiempo: recargá y probá de nuevo');
+    return this.oneKnowledge(check(res) as KnowledgeRow);
+  }
+
+  async updateKnowledgeDraft(id: string, patch: Pick<KnowledgeArticle, 'title' | 'body' | 'validFrom' | 'validTo'>) {
+    return this.oneKnowledge(
+      check(await this.db.rpc('knowledge_update_draft', { p_id: id, p_title: patch.title.trim(), p_body: patch.body.trim(), p_valid_from: patch.validFrom, p_valid_to: patch.validTo ?? null })) as KnowledgeRow,
+    );
+  }
+
+  async transitionKnowledge(id: string, action: KnowledgeAction, note?: string) {
+    return this.oneKnowledge(check(await this.db.rpc('knowledge_transition', { p_id: id, p_action: action, p_note: note?.trim() || null })) as KnowledgeRow);
+  }
+
+  async listConsents() {
+    const rows = check(await this.db.from('consent_events').select('*').order('created_at')) as ConsentRow[];
+    const names = await this.names(rows.map((r) => r.actor_id));
+    return rows.map((r) => toConsent(r, names));
+  }
+
+  async recordConsent(input: NewConsentInput) {
+    const actor_id = await this.uid();
+    const row = check(
+      await this.db
+        .from('consent_events')
+        .insert({ organization_id: input.organizationId, lead_id: input.leadId, channel: input.channel, granted: input.granted, source: input.source.trim(), evidence: input.evidence?.trim() || null, actor_id })
+        .select('*')
+        .single(),
+    ) as ConsentRow;
+    return toConsent(row, await this.names([row.actor_id]));
+  }
+
+  async listMessages() {
+    const rows = check(await this.db.from('conversation_messages').select('*').order('occurred_at')) as MessageRow[];
+    const names = await this.names(rows.map((r) => r.logged_by));
+    return rows.map((r) => toMessage(r, names));
+  }
+
+  async logMessage(input: NewMessageInput) {
+    const logged_by = await this.uid();
+    const row = check(
+      await this.db
+        .from('conversation_messages')
+        .insert({ organization_id: input.organizationId, lead_id: input.leadId, channel: input.channel, direction: input.direction, body: input.body.trim(), occurred_at: input.occurredAt, logged_by })
+        .select('*')
+        .single(),
+    ) as MessageRow;
+    return toMessage(row, await this.names([row.logged_by]));
   }
 
   async runAiAnalysis(organizationId: OrganizationId, platform: Platform, campaignId: string, range: DateRange) {

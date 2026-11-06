@@ -9,6 +9,13 @@ export type Action =
   | 'campaign:import'
   | 'integration:manage'
   | 'prompt:read'
+  | 'service:read'
+  | 'service:manage'
+  | 'parts:request'
+  | 'parts:manage'
+  | 'knowledge:edit'
+  | 'knowledge:approve'
+  | 'conversation:log'
   | 'prompt:draft'
   | 'recommendation:run'
   | 'recommendation:feedback'
@@ -35,6 +42,13 @@ const MATRIX: Record<Action, readonly Role[]> = {
   'campaign:import': ['super_admin', 'dealership_admin'],
   'integration:manage': ['super_admin', 'dealership_admin'],
   'prompt:read': ['super_admin', 'dealership_admin', 'sales_advisor', 'read_only'],
+  'service:read': ['super_admin', 'dealership_admin', 'sales_advisor', 'post_sales', 'read_only'],
+  'service:manage': ['super_admin', 'dealership_admin', 'post_sales'],
+  'parts:request': ['super_admin', 'dealership_admin', 'sales_advisor', 'post_sales'],
+  'parts:manage': ['super_admin', 'dealership_admin', 'post_sales'],
+  'knowledge:edit': ['super_admin', 'dealership_admin', 'post_sales'],
+  'knowledge:approve': ['super_admin', 'dealership_admin'],
+  'conversation:log': ['super_admin', 'dealership_admin', 'sales_advisor', 'post_sales'],
   'prompt:draft': ['super_admin', 'dealership_admin'],
   'recommendation:run': ['super_admin', 'dealership_admin', 'sales_advisor'],
   'recommendation:feedback': ['super_admin', 'dealership_admin', 'sales_advisor'],

@@ -122,7 +122,7 @@ export interface Task {
 export const TASK_PRIORITY_LABEL: Record<TaskPriority, string> = { high: 'Alta', normal: 'Normal', low: 'Baja' };
 export const TASK_STATUS_LABEL: Record<TaskStatus, string> = { pending: 'Pendiente', in_progress: 'En curso', done: 'Completada' };
 
-export type ActivityKind = 'created' | 'status' | 'assigned' | 'note' | 'task' | 'quote' | 'import';
+export type ActivityKind = 'created' | 'status' | 'assigned' | 'note' | 'task' | 'quote' | 'import' | 'consent' | 'message' | 'service';
 export interface LeadActivity {
   id: string;
   organizationId: OrganizationId;
@@ -315,5 +315,174 @@ export interface RecommendationFeedback {
   comment?: string;
   userId: string;
   userName?: string;
+  createdAt: string;
+}
+
+// ───────────── P4: postventa, conocimiento, consentimiento e inbox ─────────────
+
+export type Tone = 'green' | 'gold' | 'red' | 'gray' | 'violet' | 'amber';
+
+export const APPOINTMENT_STATUSES = ['scheduled', 'confirmed', 'checked_in', 'in_progress', 'ready', 'delivered', 'cancelled', 'no_show'] as const;
+export type AppointmentStatus = (typeof APPOINTMENT_STATUSES)[number];
+export const SERVICE_TYPES = ['maintenance', 'repair', 'warranty', 'recall', 'pdi', 'other'] as const;
+export type ServiceType = (typeof SERVICE_TYPES)[number];
+
+export const APPOINTMENT_STATUS_LABEL: Record<AppointmentStatus, [string, Tone]> = {
+  scheduled: ['Agendado', 'gray'],
+  confirmed: ['Confirmado', 'violet'],
+  checked_in: ['Recibido', 'gold'],
+  in_progress: ['En taller', 'amber'],
+  ready: ['Listo para entregar', 'green'],
+  delivered: ['Entregado', 'green'],
+  cancelled: ['Cancelado', 'red'],
+  no_show: ['No se presentó', 'red'],
+};
+
+export const SERVICE_TYPE_LABEL: Record<ServiceType, string> = {
+  maintenance: 'Mantenimiento / service',
+  repair: 'Reparación',
+  warranty: 'Garantía',
+  recall: 'Campaña de seguridad (recall)',
+  pdi: 'Preentrega 0 km',
+  other: 'Otro',
+};
+
+export interface ServiceAppointment {
+  id: string;
+  organizationId: OrganizationId;
+  leadId?: string;
+  customerName: string;
+  phoneE164?: string;
+  vehicle: string;
+  plate?: string;
+  mileage?: number;
+  serviceType: ServiceType;
+  scheduledAt: string; // ISO
+  durationMin: number;
+  bay: string;
+  advisorId?: string;
+  status: AppointmentStatus;
+  notes?: string;
+  statusReason?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AppointmentEvent {
+  id: string;
+  appointmentId: string;
+  fromStatus?: AppointmentStatus;
+  toStatus: AppointmentStatus;
+  actorName?: string;
+  reason?: string;
+  createdAt: string;
+}
+
+export const PARTS_STATUSES = ['requested', 'quoted', 'ordered', 'received', 'delivered', 'cancelled'] as const;
+export type PartsStatus = (typeof PARTS_STATUSES)[number];
+export const PARTS_STATUS_LABEL: Record<PartsStatus, [string, Tone]> = {
+  requested: ['Solicitado', 'gray'],
+  quoted: ['Cotizado', 'violet'],
+  ordered: ['Pedido a fábrica', 'amber'],
+  received: ['Recibido', 'gold'],
+  delivered: ['Entregado', 'green'],
+  cancelled: ['Cancelado', 'red'],
+};
+
+export interface PartsRequest {
+  id: string;
+  organizationId: OrganizationId;
+  kind: 'part' | 'accessory';
+  appointmentId?: string;
+  leadId?: string;
+  customerName: string;
+  partNumber?: string;
+  description: string;
+  quantity: number;
+  unitPrice?: number;
+  currency: string;
+  eta?: string; // YYYY-MM-DD
+  status: PartsStatus;
+  statusReason?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const KNOWLEDGE_CATEGORIES = ['producto', 'financiacion', 'postventa', 'garantia', 'procesos', 'objeciones'] as const;
+export type KnowledgeCategory = (typeof KNOWLEDGE_CATEGORIES)[number];
+export const KNOWLEDGE_CATEGORY_LABEL: Record<KnowledgeCategory, string> = {
+  producto: 'Producto y versiones',
+  financiacion: 'Financiación y planes',
+  postventa: 'Postventa y service',
+  garantia: 'Garantía',
+  procesos: 'Procesos internos',
+  objeciones: 'Objeciones frecuentes',
+};
+export const KNOWLEDGE_STATUSES = ['draft', 'in_review', 'published', 'archived'] as const;
+export type KnowledgeStatus = (typeof KNOWLEDGE_STATUSES)[number];
+export const KNOWLEDGE_STATUS_LABEL: Record<KnowledgeStatus, [string, Tone]> = {
+  draft: ['Borrador', 'gray'],
+  in_review: ['En revisión', 'gold'],
+  published: ['Publicado', 'green'],
+  archived: ['Archivado', 'gray'],
+};
+
+export interface KnowledgeArticle {
+  id: string;
+  organizationId: OrganizationId;
+  articleKey: string; // agrupa las versiones del mismo artículo
+  version: number;
+  title: string;
+  body: string;
+  language: 'es' | 'en';
+  category: KnowledgeCategory;
+  model?: string;
+  validFrom: string; // YYYY-MM-DD
+  validTo?: string;
+  status: KnowledgeStatus;
+  createdBy: string;
+  createdByName?: string;
+  approvedByName?: string;
+  approvedAt?: string;
+  reviewNote?: string;
+  createdAt: string;
+}
+
+export const CHANNELS = ['whatsapp', 'instagram', 'messenger', 'email', 'phone', 'in_person'] as const;
+export type Channel = (typeof CHANNELS)[number];
+export const CHANNEL_LABEL: Record<Channel, string> = {
+  whatsapp: 'WhatsApp',
+  instagram: 'Instagram',
+  messenger: 'Messenger',
+  email: 'Email',
+  phone: 'Teléfono',
+  in_person: 'En persona',
+};
+/** Canales donde un mensaje saliente requiere consentimiento registrado. */
+export const CONSENT_CHANNELS = ['whatsapp', 'email'] as const;
+export type ConsentChannel = (typeof CONSENT_CHANNELS)[number];
+
+export interface ConsentEvent {
+  id: string;
+  organizationId: OrganizationId;
+  leadId: string;
+  channel: ConsentChannel;
+  granted: boolean;
+  source: string;
+  evidence?: string;
+  actorName?: string;
+  createdAt: string;
+}
+
+export interface ConversationMessage {
+  id: string;
+  organizationId: OrganizationId;
+  leadId: string;
+  channel: Channel;
+  direction: 'in' | 'out';
+  body: string;
+  occurredAt: string; // cuándo ocurrió (registro manual)
+  loggedByName?: string;
   createdAt: string;
 }
