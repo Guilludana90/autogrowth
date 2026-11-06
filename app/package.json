@@ -10,9 +10,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:db": "bash scripts/test-db.sh",
-    "test:e2e": "node e2e/smoke.mjs && node e2e/p1.mjs && node e2e/p2.mjs"
+    "test:e2e": "node e2e/smoke.mjs && node e2e/p1.mjs && node e2e/p2.mjs && node e2e/p3.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "1.1.0",
     "@supabase/ssr": "0.12.7",
     "@supabase/supabase-js": "2.119.0",
     "next": "16.4.5",

@@ -32,7 +32,7 @@ export default function CommandCenter() {
     const recs = campaigns
       .map((c) => ({
         campaign: c,
-        rec: analyzeCampaign(c, rows.filter((r) => r.campaignId === c.id), leadsInRange.filter((l) => l.campaignId === c.id), now),
+        rec: analyzeCampaign(c, rows.filter((r) => r.campaignId === c.id), leadsInRange.filter((l) => l.campaignId === c.id), now, range),
       }))
       .filter((x) => x.rec.evidence.some((e) => e.metric === 'spend' && Number(e.value) > 0))
       .sort((a, b) => PRIORITY_RANK[a.rec.priority] - PRIORITY_RANK[b.rec.priority]);
@@ -90,7 +90,7 @@ export default function CommandCenter() {
         <section className="panel" aria-labelledby="recs">
           <div className="panel-head">
             <h2 id="recs">AI Growth Recommendations</h2>
-            <Link className="btn secondary sm" href={hrefWithFilters('/campaigns')}>Ver todas →</Link>
+            <Link className="btn secondary sm" href={hrefWithFilters('/recommendations')}>Ver todas →</Link>
           </div>
           {top ? <RecommendationCard campaign={top.campaign} rec={top.rec} compact /> : <div className="empty">Sin campañas con inversión en el período.</div>}
         </section>

@@ -43,7 +43,7 @@ export default function CampaignView() {
       crmCpl: safeRatio(m.spend, f.crmLeads),
       costPerWon: safeRatio(m.spend, f.won),
       lastData,
-      rec: analyzeCampaign(c, rows, cl, new Date().toISOString()),
+      rec: analyzeCampaign(c, rows, cl, new Date().toISOString(), range),
     };
   }, [c, leads, metrics, range]);
 

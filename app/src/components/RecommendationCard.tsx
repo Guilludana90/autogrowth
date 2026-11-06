@@ -1,29 +1,61 @@
 'use client';
 
-import { useState } from 'react';
-import type { CampaignRecommendation } from '@/lib/domain/recommendations';
+import { useState, type ReactNode } from 'react';
+import { toRecommendationJson, type CampaignRecommendation } from '@/lib/domain/recommendations';
 import type { Campaign } from '@/lib/domain/types';
 import { PLATFORM_LABEL } from '@/lib/domain/types';
 import { Dialog } from './Dialog';
 
-const PRIORITY: Record<CampaignRecommendation['priority'], [string, string]> = {
+export const PRIORITY_TAG: Record<CampaignRecommendation['priority'], [string, string]> = {
   high: ['Prioridad alta', 'red'],
   medium: ['Prioridad media', 'gold'],
   low: ['Prioridad baja', 'green'],
 };
 
-export function RecommendationCard({ campaign, rec, compact }: { campaign: Campaign; rec: CampaignRecommendation; compact?: boolean }) {
+export const AREA_LABEL: Record<CampaignRecommendation['problemArea'], string> = {
+  media: 'Problema de pauta',
+  capture: 'Problema de captura al CRM',
+  sales: 'Problema de gestión comercial',
+  data: 'Faltan datos',
+  none: 'Sin problema detectado',
+};
+
+export function EngineTag({ rec }: { rec: CampaignRecommendation }) {
+  if (rec.engine === 'ai') return <span className="tag violet" title={rec.version}>✧ Análisis IA · {rec.version.split(' · ')[0]?.replace('prompt:campaign_analyst@', 'prompt ')}</span>;
+  return (
+    <span className={`tag ${rec.fallbackReason ? 'amber' : 'gray'}`} title={rec.fallbackReason}>
+      {rec.fallbackReason ? 'Respaldo de reglas' : 'Motor de reglas'} · {rec.version}
+    </span>
+  );
+}
+
+export function Confidence({ value, reason }: { value: number; reason?: string }) {
+  const pct = Math.round(value * 100);
+  return (
+    <span className="confidence" title={reason}>
+      Confianza {pct}%
+      <i aria-hidden="true">
+        <b style={{ width: `${pct}%` }} />
+      </i>
+    </span>
+  );
+}
+
+export function RecommendationCard({ campaign, rec, compact, footer }: { campaign: Campaign; rec: CampaignRecommendation; compact?: boolean; footer?: ReactNode }) {
   const [json, setJson] = useState(false);
-  const [label, tone] = PRIORITY[rec.priority];
+  const [label, tone] = PRIORITY_TAG[rec.priority];
   return (
     <article className="rec">
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+      <div className="rec-head">
         <span className={`tag ${tone}`}>{label}</span>
-        <span className="tag gray">Motor de reglas · {rec.version}</span>
+        <EngineTag rec={rec} />
+        <span className="tag gray">{AREA_LABEL[rec.problemArea]}</span>
+        <Confidence value={rec.confidence} reason={rec.confidenceReason} />
       </div>
       <h3>{campaign.name}</h3>
       <div className="faint">
-        {PLATFORM_LABEL[campaign.platform]} · {campaign.objective}
+        {PLATFORM_LABEL[campaign.platform]} · {campaign.objective || 'sin objetivo informado'}
+        {rec.window && <> · {rec.window.from} a {rec.window.to}</>}
       </div>
       <dl>
         <div>
@@ -57,15 +89,25 @@ export function RecommendationCard({ campaign, rec, compact }: { campaign: Campa
           </div>
         )}
       </dl>
-      <div style={{ marginTop: 14 }}>
+      <div style={{ marginTop: 14, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <button className="btn secondary sm" onClick={() => setJson(true)}>
           Ver JSON
         </button>
+        {footer}
       </div>
-      <Dialog open={json} title={`Análisis · ${campaign.name}`} onClose={() => setJson(false)} wide>
-        <p className="faint">Salida estructurada del motor determinista. Las recomendaciones nunca ejecutan acciones en Ads ni envían mensajes.</p>
-        <pre className="json">{JSON.stringify(rec, null, 2)}</pre>
-      </Dialog>
+      <JsonDialog open={json} onClose={() => setJson(false)} title={`Análisis · ${campaign.name}`} recs={[rec]} />
     </article>
+  );
+}
+
+export function JsonDialog({ open, onClose, title, recs }: { open: boolean; onClose: () => void; title: string; recs: CampaignRecommendation[] }) {
+  const out = recs.map(toRecommendationJson);
+  return (
+    <Dialog open={open} title={title} onClose={onClose} wide>
+      <p className="faint">
+        Salida estructurada y validada (diagnosis, main_issue, recommended_action, marketing_actions, sales_actions, priority, evidence, confidence, data_gaps, model_or_rule_version, generated_at). Las recomendaciones nunca ejecutan acciones en Ads ni envían mensajes.
+      </p>
+      <pre className="json">{JSON.stringify(out.length === 1 ? out[0] : out, null, 2)}</pre>
+    </Dialog>
   );
 }

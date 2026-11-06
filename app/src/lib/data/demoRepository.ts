@@ -4,13 +4,39 @@ import type { MetricImportPreview } from '../domain/metricImport';
 import { normalizeEmail } from '../domain/phone';
 import { nextStatus, validUntil, type QuoteAction } from '../domain/quotes';
 import { scoreLead } from '../domain/scoring';
-import type { Campaign, CampaignMetricsDaily, Integration, Lead, LeadActivity, Member, MetricImportJob, OrganizationId, PriceDocument, Quote, Role, Task } from '../domain/types';
+import type {
+  Campaign,
+  CampaignMetricsDaily,
+  Integration,
+  Lead,
+  LeadActivity,
+  Member,
+  MetricImportJob,
+  OrganizationId,
+  Platform,
+  PriceDocument,
+  PromptAction,
+  PromptEvent,
+  PromptVersion,
+  Quote,
+  RecommendationFeedback,
+  RecommendationRun,
+  Role,
+  Task,
+} from '../domain/types';
+import { nextPromptStatus, VERSION_RE } from '../domain/governance';
+import type { CampaignRecommendation } from '../domain/recommendations';
+import { toRecommendationJson } from '../domain/recommendations';
+import { demoPrompts } from '../demo/seedP3';
 import { ORGANIZATIONS } from '../domain/types';
 import { STATUS_LABEL } from '../domain/types';
 import { DEMO_CAMPAIGNS, demoLeads, demoMetrics } from '../demo/seed';
 import { DEMO_MEMBERS, DEMO_USER_ID, demoPriceDocuments, demoQuotes, demoTasks } from '../demo/seedP1';
 import type {
+  AiAnalysisResult,
+  AiStatus,
   ImportJob,
+  NewPromptDraftInput,
   LeadPatch,
   NewLeadInput,
   NewPriceDocumentInput,
@@ -21,7 +47,7 @@ import type {
   TaskPatch,
 } from './repository';
 
-const KEY = 'autogrowth:demo:v4';
+const KEY = 'autogrowth:demo:v5';
 
 interface DemoMetricJob extends MetricImportJob {
   previous: CampaignMetricsDaily[];
@@ -32,6 +58,7 @@ interface DemoMetricJob extends MetricImportJob {
 const mkey = (m: Pick<CampaignMetricsDaily, 'organizationId' | 'platform' | 'campaignId' | 'date'>) =>
   `${m.organizationId}|${m.platform}|${m.campaignId}|${m.date}`;
 const ckey = (c: { organizationId: string; platform: string; id: string }) => `${c.organizationId}|${c.platform}|${c.id}`;
+export const DEMO_AI_OFF = 'Modo demo: la IA generativa está desactivada. Las recomendaciones salen del motor de reglas; el análisis con IA se habilita en el servidor con Supabase y ANTHROPIC_API_KEY.';
 const DEMO_OFF = 'Modo demo: la conexión con Meta está desactivada. Se habilita en un entorno con Supabase y una app de Meta de desarrollo.';
 
 interface DemoState {
@@ -46,6 +73,10 @@ interface DemoState {
   campaigns: Campaign[];
   metrics: CampaignMetricsDaily[];
   metricJobs: DemoMetricJob[];
+  prompts: PromptVersion[];
+  promptEvents: PromptEvent[];
+  runs: RecommendationRun[];
+  feedback: RecommendationFeedback[];
 }
 
 function readStorage(): DemoState | null {
@@ -85,7 +116,12 @@ export class DemoRepository implements Repository {
   private fresh(): DemoState {
     const metrics = demoMetrics(this.today);
     const leads = demoLeads(this.today, metrics);
+    const prompts = demoPrompts(this.today);
     return {
+      prompts: prompts.versions,
+      promptEvents: prompts.events,
+      runs: [],
+      feedback: [],
       campaigns: DEMO_CAMPAIGNS,
       metrics,
       metricJobs: [],
@@ -468,6 +504,151 @@ export class DemoRepository implements Repository {
     for (const l of this.state.leads) if (l.organizationId === organizationId && l.advisorId === userId) delete l.advisorId;
     for (const t of this.state.tasks) if (t.organizationId === organizationId && t.assigneeId === userId) delete t.assigneeId;
     this.commit();
+  }
+
+  // ───────────── P3 ─────────────
+
+  async listPromptVersions() {
+    return clone(this.state.prompts);
+  }
+
+  async listPromptEvents() {
+    return clone(this.state.promptEvents);
+  }
+
+  private promptEvent(v: PromptVersion, from: PromptVersion['status'] | undefined, reason?: string) {
+    this.state.promptEvents.push({ id: uid(), versionId: v.id, fromStatus: from, toStatus: v.status, actorName: 'Usuario demo', reason, createdAt: new Date().toISOString() });
+  }
+
+  async createPromptDraft(input: NewPromptDraftInput) {
+    const text = input.promptText.trim();
+    if (!text || text.length > 20000) throw new Error('El prompt no puede quedar vacío ni superar 20.000 caracteres');
+    if (!VERSION_RE.test(input.version)) throw new Error('La versión tiene que tener el formato v1.3');
+    if (this.state.prompts.some((p) => p.organizationId === input.organizationId && p.name === input.name && p.version === input.version))
+      throw new Error(`Ya existe la versión ${input.version}`);
+    const v: PromptVersion = {
+      id: uid(),
+      ...input,
+      promptText: text,
+      changeNote: input.changeNote?.trim() || undefined,
+      status: 'draft',
+      createdBy: DEMO_USER_ID,
+      createdByName: 'Usuario demo',
+      createdAt: new Date().toISOString(),
+    };
+    this.state.prompts.push(v);
+    this.promptEvent(v, undefined, v.changeNote);
+    this.commit();
+    return clone(v);
+  }
+
+  async updatePromptDraft(id: string, promptText: string, changeNote?: string) {
+    const v = this.state.prompts.find((p) => p.id === id);
+    if (!v) throw new Error('Versión inexistente');
+    if (v.status !== 'draft') throw new Error('Solo se edita un borrador');
+    if (v.createdBy !== DEMO_USER_ID) throw new Error('Solo el autor edita su borrador');
+    const text = promptText.trim();
+    if (!text || text.length > 20000) throw new Error('El prompt no puede quedar vacío ni superar 20.000 caracteres');
+    v.promptText = text;
+    v.changeNote = changeNote?.trim() || undefined;
+    this.commit();
+    return clone(v);
+  }
+
+  /** Mismas validaciones de estado y motivo que prompt_transition(); el rol lo valida AppContext con canPrompt. */
+  async transitionPrompt(id: string, action: PromptAction, reason?: string) {
+    const v = this.state.prompts.find((p) => p.id === id);
+    if (!v) throw new Error('Versión inexistente');
+    const r = reason?.trim() || undefined;
+    const now = new Date().toISOString();
+    const from = v.status;
+    const retireActive = (why: string) => {
+      const cur = this.state.prompts.find((p) => p.organizationId === v.organizationId && p.name === v.name && p.status === 'active');
+      if (!cur) return;
+      cur.status = 'rolled_back';
+      cur.decidedReason = why;
+      this.promptEvent(cur, 'active', why);
+    };
+    if (action === 'submit') {
+      if (v.status !== 'draft') throw new Error('Solo un borrador se envía a revisión');
+      v.submittedAt = now;
+    } else if (action === 'approve') {
+      if (v.status !== 'in_review') throw new Error('Solo se aprueba una versión en revisión');
+      v.approvedByName = 'Usuario demo';
+      v.approvedAt = now;
+      v.decidedReason = r;
+    } else if (action === 'reject') {
+      if (v.status !== 'in_review' && v.status !== 'approved') throw new Error(`No se puede rechazar en estado ${v.status}`);
+      if (!r) throw new Error('El rechazo requiere un motivo');
+      v.decidedReason = r;
+    } else if (action === 'activate') {
+      if (v.status !== 'approved') throw new Error('Solo se activa una versión aprobada');
+      retireActive(r ?? `Reemplazada por ${v.version}`);
+      v.activatedAt = now;
+    } else {
+      if (v.status !== 'rolled_back' || !v.approvedByName) throw new Error('Solo se puede volver a una versión aprobada que estuvo activa');
+      if (!r) throw new Error('El rollback requiere un motivo');
+      retireActive(r);
+      v.activatedAt = now;
+    }
+    v.status = nextPromptStatus(action);
+    this.promptEvent(v, from, action === 'reject' || action === 'rollback' || action === 'approve' ? r : undefined);
+    this.commit();
+    return clone(v);
+  }
+
+  async listRecommendationRuns() {
+    return clone(this.state.runs);
+  }
+
+  async saveRulesRun(organizationId: OrganizationId, platform: Platform, rec: CampaignRecommendation) {
+    if (rec.engine !== 'rules') throw new Error('Las corridas de IA las guarda el servidor');
+    if (!rec.window) throw new Error('Falta el período analizado');
+    const run: RecommendationRun = {
+      id: uid(),
+      organizationId,
+      platform,
+      campaignId: rec.campaignId,
+      windowFrom: rec.window.from,
+      windowTo: rec.window.to,
+      engine: 'rules',
+      version: rec.version,
+      priority: rec.priority,
+      problemArea: rec.problemArea,
+      confidence: rec.confidence,
+      payload: toRecommendationJson(rec),
+      createdAt: new Date().toISOString(),
+    };
+    this.state.runs.unshift(run);
+    this.commit();
+    return clone(run);
+  }
+
+  async listFeedback() {
+    return clone(this.state.feedback);
+  }
+
+  async submitFeedback(runId: string, useful: boolean, comment?: string) {
+    const run = this.state.runs.find((r) => r.id === runId);
+    if (!run) throw new Error('Corrida inexistente');
+    const c = comment?.trim() || undefined;
+    if (c && c.length > 500) throw new Error('El comentario admite hasta 500 caracteres');
+    let f = this.state.feedback.find((x) => x.runId === runId && x.userId === DEMO_USER_ID);
+    if (f) Object.assign(f, { useful, comment: c });
+    else {
+      f = { id: uid(), organizationId: run.organizationId, runId, useful, comment: c, userId: DEMO_USER_ID, userName: 'Usuario demo', createdAt: new Date().toISOString() };
+      this.state.feedback.unshift(f);
+    }
+    this.commit();
+    return clone(f);
+  }
+
+  async aiStatus(): Promise<AiStatus> {
+    return { enabled: false, reason: DEMO_AI_OFF };
+  }
+
+  async runAiAnalysis(): Promise<AiAnalysisResult> {
+    throw new Error(DEMO_AI_OFF);
   }
 
   async resetDemo() {

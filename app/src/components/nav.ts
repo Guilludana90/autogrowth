@@ -32,8 +32,10 @@ export const NAV: NavGroup[] = [
   {
     label: 'AI Intelligence',
     items: [
-      { label: 'AI Growth Recommendations', phase: 'P3' },
-      { label: 'Alertas de datos faltantes', phase: 'P3' },
+      { label: 'AI Growth Recommendations', href: '/recommendations' },
+      { label: 'Resúmenes de conversaciones', phase: 'P4' },
+      { label: 'Oportunidades detectadas', href: '/opportunities' },
+      { label: 'Alertas de datos faltantes', href: '/data-alerts' },
     ],
   },
   { label: 'Postventa y repuestos', items: [{ label: 'Turnos de taller', phase: 'P4' }, { label: 'Repuestos y accesorios', phase: 'P4' }] },
@@ -42,7 +44,7 @@ export const NAV: NavGroup[] = [
     items: [
       { label: 'Estado del sistema', href: '/system' },
       { label: 'Usuarios y roles', href: '/users' },
-      { label: 'AI Governance', phase: 'P3' },
+      { label: 'AI Governance', href: '/governance' },
       { label: 'Canales conectados', href: '/integrations' },
     ],
   },
@@ -62,5 +64,9 @@ export const PAGE_TITLE: Record<string, string> = {
   '/quotes/view': 'Propuesta',
   '/documents': 'Documentos y precios',
   '/users': 'Usuarios y roles',
+  '/recommendations': 'AI Growth Recommendations',
+  '/opportunities': 'Oportunidades detectadas',
+  '/data-alerts': 'Alertas de datos faltantes',
+  '/governance': 'AI Governance',
   '/login': 'Ingresar',
 };

@@ -1,4 +1,4 @@
-# AutoGrowth OS · app (fases P0 + P1 + P2)
+# AutoGrowth OS · app (fases P0 + P1 + P2 + P3)
 
 Aplicación Next.js + TypeScript que reemplaza gradualmente al prototipo estático de `../dist/` (que queda intacto como referencia).
 
@@ -17,10 +17,10 @@ Por defecto `NEXT_PUBLIC_DEMO_MODE=true`: datos ficticios guardados en el navega
 | Comando | Qué prueba |
 |---|---|
 | `npm run typecheck` | TypeScript estricto |
-| `npm test` | Dominio: métricas, rangos, finanzas (francés, plan de ahorro, usados), recomendaciones, importador CSV, teléfonos, permisos, datos demo, tareas (vencimientos/orden), cotizaciones (transiciones, autoaprobación, vigencia), listas de precios, importador de métricas (Meta/Google CSV, es/en), conciliación Ads↔CRM, normalización de Meta Insights, state OAuth firmado |
-| `npm run test:db` | Levanta un Postgres temporal, aplica `supabase/migrations/*` y corre `supabase/tests/*_test.sql` (aislamiento por organización, roles, governance de prompts, auditoría; en P1: tareas, historial, cotizaciones con aprobación, listas de precios, alta de miembros; en P2: lotes de métricas transaccionales y reversibles, integraciones y tokens inaccesibles desde la API) |
+| `npm test` | Dominio: métricas, rangos, finanzas (francés, plan de ahorro, usados), recomendaciones, importador CSV, teléfonos, permisos, datos demo, tareas (vencimientos/orden), cotizaciones (transiciones, autoaprobación, vigencia), listas de precios, importador de métricas (Meta/Google CSV, es/en), conciliación Ads↔CRM, normalización de Meta Insights, state OAuth firmado; en P3: diagnóstico rules-v2 con contrato JSON, confianza y datos faltantes, fusión con IA sin tocar evidencia, respaldo de reglas, transiciones de prompts, diff, feedback y aprendizaje, oportunidades y alertas de datos |
+| `npm run test:db` | Levanta un Postgres temporal, aplica `supabase/migrations/*` y corre `supabase/tests/*_test.sql` (aislamiento por organización, roles, governance de prompts, auditoría; en P1: tareas, historial, cotizaciones con aprobación, listas de precios, alta de miembros; en P2: lotes de métricas transaccionales y reversibles, integraciones y tokens inaccesibles desde la API; en P3: corridas inmutables, IA solo con prompt activo, feedback uno por usuario y sin cruzar organizaciones, historial de prompts escrito por trigger, edición de borradores solo por el autor) |
 | `npm run build` | Build de producción |
-| `npm run test:e2e` | Con la app corriendo (`BASE_URL=…`): rutas, filtros globales, alta/validación, motivo de pérdida, importación idempotente + rollback, roles, mobile, sin requests externas. `e2e/p1.mjs`: ficha del lead, tareas, listas de precios, flujo de aprobación de cotizaciones, propuesta imprimible, usuarios y roles. `e2e/p2.mjs`: importación de métricas, idempotencia, detalle de campaña, canal, lotes y reversión, Meta apagada en demo |
+| `npm run test:e2e` | Con la app corriendo (`BASE_URL=…`): rutas, filtros globales, alta/validación, motivo de pérdida, importación idempotente + rollback, roles, mobile, sin requests externas. `e2e/p1.mjs`: ficha del lead, tareas, listas de precios, flujo de aprobación de cotizaciones, propuesta imprimible, usuarios y roles. `e2e/p2.mjs`: importación de métricas, idempotencia, detalle de campaña, canal, lotes y reversión, Meta apagada en demo. `e2e/p3.mjs`: recomendaciones con motor visible y JSON, feedback persistente, revisión/aprobación/publicación/rollback de prompts por rol, oportunidades → tarea, alertas de datos, IA apagada en demo |
 
 ## Conectar Supabase (solo desarrollo local hasta autorización)
 
@@ -79,9 +79,26 @@ Lo que figura en el menú con etiqueta P1–P4 está planificado y no es un link
 2. Completar las variables de Meta en `.env.local` (ver `.env.example`), con `NEXT_PUBLIC_DEMO_MODE=false` y Supabase local.
 3. En Canales conectados, ingresar la cuenta `act_…` autorizada y conectar. Solo queda "Conectada y probada" si Meta responde la consulta de la cuenta.
 
+## Qué incluye P3
+
+- **AI Growth Recommendations** (`/recommendations`): una ficha por campaña con prioridad, motor (reglas, respaldo o IA), área del problema (pauta, captura al CRM, gestión comercial, datos) y confianza. Tres columnas (diagnóstico, problema, acción), acciones separadas para marketing y para ventas, datos faltantes, KPIs de Ads y del CRM, y "Ver JSON" con el contrato del spec validado con zod (`RecommendationJsonSchema`). El CPL real usa leads del CRM; no se inventan turnos ni tiempos de respuesta que el CRM no registra.
+- **Motor de reglas `rules-v2`** (`src/lib/domain/recommendations.ts`): evidencia numérica, ventana analizada y confianza que baja con pocos días de métricas, sin leads en CRM o sin métricas.
+- **IA opcional, solo servidor** (`/api/ai/analyze`, `src/lib/ai/*`): Claude (`claude-opus-5-5` por defecto) con salida estructurada validada. Recibe solo agregados (sin nombres, teléfonos ni emails), usa la versión de prompt **activa** de AI Governance y no puede cambiar la evidencia ni subir la confianza. Si no hay prompt activo, no hay métricas, el modelo falla o la respuesta no cumple el contrato, se guarda y muestra el diagnóstico de reglas con el motivo. Apagada salvo `NEXT_PUBLIC_DEMO_MODE=false` + `AI_ANALYSIS_ENABLED=true` + `ANTHROPIC_API_KEY`. Ninguna recomendación ejecuta campañas ni envía mensajes.
+- **Feedback persistente**: útil / no útil con comentario. La primera respuesta guarda la corrida (snapshot inmutable) y el feedback queda atado a ella; responder de nuevo cambia la respuesta propia.
+- **AI Governance** (`/governance`): KPIs calculados (feedback, tasa útil, versiones activas y en espera, diagnósticos guardados), lista de versiones con autor y aprobador, diff contra la versión activa, historial inmutable con usuario, fecha y motivo, y aprendizaje a partir del feedback (no saca conclusiones con menos de 5 respuestas). Flujo: borrador (Super Admin o Gerente) → revisión (autor) → aprobar / rechazar con motivo → publicar → volver a una versión anterior con motivo. Solo Super Admin aprueba, publica o vuelve atrás; nada se promueve solo.
+- **Oportunidades detectadas** (`/opportunities`): leads calientes sin contactar (24 h a 30 días), negociaciones sin movimiento ni tarea, cotizaciones aprobadas sin cierre o vencidas, perdidos por precio con lista nueva. Cada una con evidencia y botón para crear la tarea.
+- **Alertas de datos faltantes** (`/data-alerts`): leads sin teléfono ni email, nuevos sin asesor, leads de pauta sin campaña, campañas activas con métricas viejas, campañas con leads en Ads y ninguno en el CRM, cotizaciones en borrador viejas. Con cantidad, ejemplos y cómo corregir.
+- Migración `supabase/migrations/0005_ai_intelligence.sql`: `recommendation_runs` (sin update ni delete), `recommendation_feedback`, `prompt_version_events` (lo escribe un trigger), RPC `prompt_update_draft` y vista `prompt_versions_named`.
+
+### Probar la IA (no se hizo todavía)
+
+1. Con Supabase local y `NEXT_PUBLIC_DEMO_MODE=false`, completar `AI_ANALYSIS_ENABLED=true` y `ANTHROPIC_API_KEY` en `.env.local` (ver `.env.example`).
+2. Publicar una versión del prompt "Analista de campañas" en AI Governance.
+3. En AI Growth Recommendations, elegir una campaña con métricas y "Ejecutar análisis IA". La corrida queda guardada con la versión de prompt y el modelo.
+
 ## Pendiente (siguientes fases)
 
 - P2 restante: probar Meta contra una app y cuenta reales de sandbox (requiere credenciales y autorización); Lead Ads y CAPI; Google Ads API; refresco programado de la sincronización.
-- P3: IA generativa opcional sobre el motor de reglas, feedback persistente, pantalla de AI Governance (la base ya está).
+- P3 restante: probar el análisis con IA contra la API real (requiere clave y autorización); registrar la hora del primer contacto para medir tiempo de respuesta; resúmenes de conversaciones (dependen del inbox de P4).
 - P4: postventa, inbox, WhatsApp con consentimiento.
 - En Supabase, la importación de **leads** todavía hace varias llamadas seguidas (la de métricas ya es transaccional); conviene moverla a una RPC antes de usarla con datos reales.
