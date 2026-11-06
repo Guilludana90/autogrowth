@@ -11,8 +11,19 @@ export default function SystemPage() {
     ['Frontend', 'Next.js + TypeScript', 'Disponible', 'green'],
     ['Modo demo', app.demo ? 'Datos ficticios en este navegador; envíos y sincronizaciones externas bloqueados' : 'Desactivado', app.demo ? 'Activo' : 'Inactivo', app.demo ? 'gold' : 'gray'],
     ['Supabase Auth + Postgres + RLS', supabaseConfigured ? 'Variables configuradas' : 'Sin configurar (ver app/README.md)', !app.demo && supabaseConfigured ? 'Conectado' : 'No conectado', !app.demo && supabaseConfigured ? 'green' : 'gray'],
-    ['Meta Ads (OAuth, Lead Ads, CAPI)', 'Planificado para P2, en sandbox y con autorización explícita', 'No conectado', 'gray'],
-    ['Google Ads', 'Después de Meta', 'No conectado', 'gray'],
+    (() => {
+      const connected = app.integrations.filter((i) => i.provider === 'meta' && i.status === 'connected').length;
+      return [
+        'Meta Ads · métricas (OAuth + Insights)',
+        app.demo
+          ? 'Código listo del lado servidor; desactivado en modo demo. Solo cuentas en META_ALLOWED_AD_ACCOUNTS. Lead Ads y CAPI, más adelante'
+          : 'OAuth y sincronización del lado servidor, solo cuentas autorizadas. Lead Ads y CAPI, más adelante',
+        connected ? `Conectado y probado (${connected})` : 'No conectado',
+        connected ? 'green' : 'gray',
+      ] as [string, string, string, string];
+    })(),
+    ['Métricas por CSV (Meta / Google Ads)', 'Importación con vista previa, lotes reversibles y auditoría', 'Disponible', 'green'],
+    ['Google Ads API', 'Después de Meta. Hoy por CSV', 'No conectado', 'gray'],
     ['WhatsApp Business', 'P4. No se toca el WhatsApp operativo', 'No conectado', 'gray'],
     ['Tecnom', 'Solo importación CSV manual y reversible. Nunca se escribe en Tecnom', 'CSV manual', 'amber'],
     ['Documentos (Storage)', 'Las listas de precios guardan sus filas validadas; el archivo original irá a Supabase Storage privado', 'Pendiente', 'gray'],

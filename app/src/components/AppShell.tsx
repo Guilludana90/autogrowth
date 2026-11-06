@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { PRESET_LABEL, presetRange, type RangePreset } from '@/lib/domain/dates';
-import { ORGANIZATIONS, ROLES, ROLE_LABEL, type OrgFilter, type Role } from '@/lib/domain/types';
+import { ORGANIZATIONS, PLATFORM_LABEL, ROLES, ROLE_LABEL, type OrgFilter, type Platform, type Role } from '@/lib/domain/types';
 import { useApp } from '@/lib/state/AppContext';
 import { useFilters } from '@/lib/state/filters';
 import { NAV, PAGE_TITLE } from './nav';
@@ -66,12 +66,15 @@ function RangeControl() {
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const app = useApp();
-  const { org, setOrg, hrefWithFilters } = useFilters();
+  const { org, setOrg, channel, setChannel, hrefWithFilters } = useFilters();
   const [navOpen, setNavOpen] = useState(false);
 
   useEffect(() => setNavOpen(false), [pathname]);
 
   if (pathname === '/login') return <>{children}</>;
+  // El canal aplica a las pantallas de pauta; en el resto (leads, tareas…) no se oculta información por canal.
+  const channelScreens = ['/', '/campaigns', '/campaigns/view'];
+  const channels = [...new Set(app.campaigns.map((c) => c.platform))];
 
   const visibleOrgs = ORGANIZATIONS.filter((o) => app.demo || app.session?.roles[o.id]);
   const roleLabel = app.demo
@@ -134,6 +137,16 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </option>
               ))}
             </select>
+            {channelScreens.includes(pathname) && (
+              <select className="field" aria-label="Canal" value={channel} onChange={(e) => setChannel(e.target.value as Platform | 'all')}>
+                <option value="all">Todos los canales</option>
+                {channels.map((p) => (
+                  <option key={p} value={p}>
+                    {PLATFORM_LABEL[p]}
+                  </option>
+                ))}
+              </select>
+            )}
             <RangeControl />
             {app.demo && (
               <select className="field" aria-label="Rol de la demo" value={app.demoRole} onChange={(e) => app.setDemoRole(e.target.value as Role)}>

@@ -26,7 +26,7 @@ export const NAV: NavGroup[] = [
     label: 'Campañas',
     items: [
       { label: 'Campaign Intelligence', href: '/campaigns' },
-      { label: 'Métricas por canal', phase: 'P2' },
+      { label: 'Métricas por canal', href: '/channels' },
     ],
   },
   {
@@ -43,7 +43,7 @@ export const NAV: NavGroup[] = [
       { label: 'Estado del sistema', href: '/system' },
       { label: 'Usuarios y roles', href: '/users' },
       { label: 'AI Governance', phase: 'P3' },
-      { label: 'Canales conectados', phase: 'P2' },
+      { label: 'Canales conectados', href: '/integrations' },
     ],
   },
 ];
@@ -53,6 +53,9 @@ export const PAGE_TITLE: Record<string, string> = {
   '/leads': 'Leads & CRM',
   '/pipeline': 'Pipeline',
   '/campaigns': 'Campaign Intelligence',
+  '/campaigns/view': 'Detalle de campaña',
+  '/channels': 'Métricas por canal',
+  '/integrations': 'Canales conectados',
   '/system': 'Estado del sistema',
   '/tasks': 'Seguimientos y tareas',
   '/quotes': 'Cotizadores',

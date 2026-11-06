@@ -3,11 +3,11 @@
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useMemo } from 'react';
 import { sanitizeRange, toDay } from '../domain/dates';
-import type { DateRange, OrgFilter } from '../domain/types';
-import { isOrganizationId } from '../domain/types';
+import type { DateRange, OrgFilter, Platform } from '../domain/types';
+import { isOrganizationId, PLATFORMS } from '../domain/types';
 
 /**
- * Filtros globales en la URL (?org=&from=&to=): se conservan al navegar, se pueden compartir
+ * Filtros globales en la URL (?org=&from=&to=&ch=): se conservan al navegar, se pueden compartir
  * y sobreviven a un refresh. Valores inválidos vuelven al default.
  */
 export function useFilters() {
@@ -17,6 +17,8 @@ export function useFilters() {
   const today = toDay(new Date());
 
   const org: OrgFilter = isOrganizationId(params.get('org')) ? (params.get('org') as OrgFilter) : 'all';
+  const chParam = params.get('ch');
+  const channel: Platform | 'all' = (PLATFORMS as readonly string[]).includes(chParam ?? '') ? (chParam as Platform) : 'all';
   const fromParam = params.get('from');
   const toParam = params.get('to');
   const range: DateRange = useMemo(() => sanitizeRange(fromParam, toParam, today), [fromParam, toParam, today]);
@@ -36,12 +38,13 @@ export function useFilters() {
 
   /** Href que conserva los filtros globales al cambiar de pantalla. */
   const hrefWithFilters = useCallback(
-    (path: string) => {
+    (path: string, extra?: Record<string, string>) => {
       const keep = new URLSearchParams();
-      for (const k of ['org', 'from', 'to']) {
+      for (const k of ['org', 'from', 'to', 'ch']) {
         const v = params.get(k);
         if (v) keep.set(k, v);
       }
+      for (const [k, v] of Object.entries(extra ?? {})) keep.set(k, v);
       const qs = keep.toString();
       return qs ? `${path}?${qs}` : path;
     },
@@ -50,10 +53,12 @@ export function useFilters() {
 
   return {
     org,
+    channel,
     range,
     today,
     setOrg: (o: OrgFilter) => update({ org: o === 'all' ? null : o }),
     setRange: (r: DateRange) => update({ from: r.from, to: r.to }),
+    setChannel: (c: Platform | 'all') => update({ ch: c === 'all' ? null : c }),
     update,
     hrefWithFilters,
   };

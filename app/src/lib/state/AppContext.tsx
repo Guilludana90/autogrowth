@@ -14,16 +14,22 @@ import type {
   TaskPatch,
 } from '../data/repository';
 import type { ImportPreview } from '../domain/leadImport';
+import type { MetricImportPreview } from '../domain/metricImport';
+import { byChannel, leadsByChannel } from '../domain/reconcile';
 import { can, grantableRoles, type Action } from '../domain/permissions';
 import { canTransition, type QuoteAction } from '../domain/quotes';
 import type {
   Advisor,
   Campaign,
   CampaignMetricsDaily,
+  DateRange,
+  Integration,
   Lead,
   LeadActivity,
   Member,
+  MetricImportJob,
   OrganizationId,
+  Platform,
   PriceDocument,
   Quote,
   Role,
@@ -51,6 +57,8 @@ interface AppState {
   quotes: Quote[];
   priceDocs: PriceDocument[];
   members: Member[];
+  metricJobs: MetricImportJob[];
+  integrations: Integration[];
   /** Rol elegido en el selector de la demo (solo DEMO_MODE). */
   demoRole: Role;
   setDemoRole: (r: Role) => void;
@@ -72,6 +80,11 @@ interface AppState {
   activatePriceDocument: (d: PriceDocument) => Promise<PriceDocument>;
   addMember: (org: OrganizationId, email: string, role: Role) => Promise<Member>;
   removeMember: (m: Member) => Promise<void>;
+  applyMetricImport: (p: MetricImportPreview, fileName: string) => Promise<MetricImportJob>;
+  rollbackMetricImport: (job: MetricImportJob) => Promise<void>;
+  connectMeta: (org: OrganizationId, adAccountId: string) => Promise<string>;
+  syncMeta: (org: OrganizationId, range: DateRange) => Promise<{ jobId: string | null; rows: number; skipped: number }>;
+  disconnectIntegration: (i: Integration) => Promise<void>;
   resetDemo: () => Promise<void>;
   /** Cambia cada vez que el historial de algún lead puede haber cambiado. */
   activityVersion: number;
@@ -97,6 +110,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [priceDocs, setPriceDocs] = useState<PriceDocument[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
+  const [metricJobs, setMetricJobs] = useState<MetricImportJob[]>([]);
+  const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [demoRole, setDemoRoleState] = useState<Role>('super_admin');
   const [activityVersion, setActivityVersion] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -117,7 +132,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       }
       const isAdminSomewhere = DEMO_MODE || Object.values(s.roles).some((x) => x === 'super_admin' || x === 'dealership_admin');
-      const [l, a, c, m, i, t, q, d, mem] = await Promise.all([
+      const [l, a, c, m, i, t, q, d, mem, mj, integ] = await Promise.all([
         r.listLeads(),
         r.listAdvisors(),
         r.listCampaigns(),
@@ -127,7 +142,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         r.listQuotes(),
         r.listPriceDocuments(),
         isAdminSomewhere ? r.listMembers() : Promise.resolve([]),
+        isAdminSomewhere ? r.listMetricImports() : Promise.resolve([]),
+        isAdminSomewhere ? r.listIntegrations() : Promise.resolve([]),
       ]);
+      setMetricJobs(mj);
+      setIntegrations(integ);
       setSession(s);
       setLeads(l);
       setAdvisors(a);
@@ -202,6 +221,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
   const deny = (msg: string) => Promise.reject(new Error(msg));
   const bump = () => setActivityVersion((v) => v + 1);
+  const refreshCampaignData = async (r: Repository) => {
+    const [c, m, mj, integ] = await Promise.all([r.listCampaigns(), r.listMetrics(), r.listMetricImports(), r.listIntegrations()]);
+    setCampaigns(c);
+    setMetrics(m);
+    setMetricJobs(mj);
+    setIntegrations(integ);
+  };
 
   const value: AppState = {
     demo: DEMO_MODE,
@@ -217,6 +243,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     quotes,
     priceDocs,
     members,
+    metricJobs,
+    integrations,
     demoRole,
     setDemoRole,
     roleFor,
@@ -340,6 +368,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setTasks(await r.listTasks());
           })
         : deny('No podés quitar a este usuario'),
+    applyMetricImport: (p, fileName) =>
+      allowed('campaign:import', p.organizationId)
+        ? guard(async (r) => {
+            const job = await r.applyMetricImport(p, fileName);
+            await refreshCampaignData(r);
+            return job;
+          })
+        : deny('Solo Super Admin o Gerente importan métricas'),
+    rollbackMetricImport: (job) =>
+      allowed('campaign:import', job.organizationId)
+        ? guard(async (r) => {
+            await r.rollbackMetricImport(job.id);
+            await refreshCampaignData(r);
+          })
+        : deny('Solo Super Admin o Gerente revierten lotes'),
+    connectMeta: (org, adAccountId) =>
+      allowed('integration:manage', org) ? guard((r) => r.connectMeta(org, adAccountId)) : deny('Solo Super Admin o Gerente conectan integraciones'),
+    syncMeta: (org, range) =>
+      allowed('integration:manage', org)
+        ? guard(async (r) => {
+            const res = await r.syncMeta(org, range);
+            await refreshCampaignData(r);
+            return res;
+          })
+        : deny('Solo Super Admin o Gerente sincronizan'),
+    disconnectIntegration: (i) =>
+      allowed('integration:manage', i.organizationId)
+        ? guard(async (r) => {
+            await r.disconnectIntegration(i.organizationId, i.provider);
+            setIntegrations(await r.listIntegrations());
+          })
+        : deny('Solo Super Admin o Gerente desconectan integraciones'),
     resetDemo: () =>
       guard(async (r) => {
         await r.resetDemo?.();
@@ -358,19 +418,23 @@ export function useApp() {
 }
 
 /** Datos ya filtrados por organización (tenant) para la vista actual. */
-export function useScoped(org: OrganizationId | 'all') {
+/** Con `channel`, campañas, métricas y leads se limitan a esa plataforma (los leads sin campaña quedan fuera). */
+export function useScoped(org: OrganizationId | 'all', channel: Platform | 'all' = 'all') {
   const app = useApp();
   return useMemo(() => {
     const visible = (o: OrganizationId) => (org === 'all' || o === org) && (app.demo || app.session?.roles[o] !== undefined);
+    const campaigns = app.campaigns.filter((c) => visible(c.organizationId));
     return {
-      leads: app.leads.filter((l) => visible(l.organizationId)),
-      campaigns: app.campaigns.filter((c) => visible(c.organizationId)),
-      metrics: app.metrics.filter((m) => visible(m.organizationId)),
+      leads: leadsByChannel(app.leads.filter((l) => visible(l.organizationId)), campaigns, channel),
+      campaigns: byChannel(campaigns, channel),
+      metrics: byChannel(app.metrics.filter((m) => visible(m.organizationId)), channel),
+      metricJobs: app.metricJobs.filter((j) => visible(j.organizationId)),
+      integrations: app.integrations.filter((i) => visible(i.organizationId)),
       advisors: app.advisors.filter((a) => visible(a.organizationId)),
       tasks: app.tasks.filter((t) => visible(t.organizationId)),
       quotes: app.quotes.filter((q) => visible(q.organizationId)),
       priceDocs: app.priceDocs.filter((d) => visible(d.organizationId)),
       members: app.members.filter((m) => visible(m.organizationId)),
     };
-  }, [app.advisors, app.campaigns, app.demo, app.leads, app.members, app.metrics, app.priceDocs, app.quotes, app.session, app.tasks, org]);
+  }, [app.advisors, app.campaigns, app.demo, app.integrations, app.leads, app.members, app.metricJobs, app.metrics, app.priceDocs, app.quotes, app.session, app.tasks, channel, org]);
 }

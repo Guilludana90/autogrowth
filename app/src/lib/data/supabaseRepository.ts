@@ -1,9 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ImportPreview } from '../domain/leadImport';
+import type { MetricImportPreview } from '../domain/metricImport';
+import { toRpcRows } from '../integrations/meta';
 import { scoreLead } from '../domain/scoring';
 import type { Advisor, Campaign, CampaignMetricsDaily, Lead, OrganizationId, Role } from '../domain/types';
 import type { QuoteAction } from '../domain/quotes';
-import type { LeadActivity, Member, PriceDocument, Quote, Task } from '../domain/types';
+import type { DateRange, Integration, LeadActivity, Member, MetricImportJob, PriceDocument, Quote, Task } from '../domain/types';
 import type {
   ImportJob,
   LeadPatch,
@@ -451,6 +453,91 @@ export class SupabaseRepository implements Repository {
   async removeMember(organizationId: OrganizationId, userId: string) {
     check(await this.db.from('memberships').delete().eq('organization_id', organizationId).eq('user_id', userId));
   }
+  // ───────────── P2 ─────────────
+
+  async listMetricImports() {
+    const rows = check(await this.db.from('metric_import_jobs').select('*').order('created_at', { ascending: false }).limit(100)) as Array<{
+      id: string; organization_id: OrganizationId; platform: MetricImportJob['platform']; source: MetricImportJob['source']; file_name: string;
+      range_from: string | null; range_to: string | null; counts: MetricImportJob['counts']; created_by: string; created_at: string; rolled_back_at: string | null;
+    }>;
+    const names = await this.names(rows.map((r) => r.created_by));
+    return rows.map<MetricImportJob>((r) => ({
+      id: r.id,
+      organizationId: r.organization_id,
+      platform: r.platform,
+      source: r.source,
+      fileName: r.file_name,
+      rangeFrom: r.range_from ?? undefined,
+      rangeTo: r.range_to ?? undefined,
+      counts: r.counts,
+      createdAt: r.created_at,
+      createdByName: names.get(r.created_by),
+      rolledBack: !!r.rolled_back_at,
+    }));
+  }
+
+  /** Una sola RPC transaccional: o entra el lote completo o no entra nada. */
+  async applyMetricImport(preview: MetricImportPreview, fileName: string) {
+    const changed = preview.outcomes.map((o) => o.metric);
+    const names = new Map(preview.outcomes.map((o) => [o.metric.campaignId, o.campaignName]));
+    const id = check(
+      await this.db.rpc('import_campaign_metrics', {
+        p_org: preview.organizationId,
+        p_platform: preview.platform,
+        p_source: 'csv',
+        p_file_name: fileName,
+        p_rows: toRpcRows(changed, names),
+        p_campaigns: preview.newCampaigns,
+      }),
+    ) as string;
+    return (await this.listMetricImports()).find((j) => j.id === id)!;
+  }
+
+  async rollbackMetricImport(jobId: string) {
+    check(await this.db.rpc('rollback_metric_import', { p_job: jobId }));
+  }
+
+  async listIntegrations() {
+    const rows = check(await this.db.from('integrations').select('*')) as Array<{
+      organization_id: OrganizationId; provider: Integration['provider']; status: Integration['status']; external_account_id: string | null;
+      external_account_name: string | null; currency: string | null; last_tested_at: string | null; last_sync_at: string | null; last_error: string | null;
+    }>;
+    return rows.map<Integration>((r) => ({
+      organizationId: r.organization_id,
+      provider: r.provider,
+      status: r.status,
+      externalAccountId: r.external_account_id ?? undefined,
+      externalAccountName: r.external_account_name ?? undefined,
+      currency: r.currency ?? undefined,
+      lastTestedAt: r.last_tested_at ?? undefined,
+      lastSyncAt: r.last_sync_at ?? undefined,
+      lastError: r.last_error ?? undefined,
+    }));
+  }
+
+  /** Llama a las rutas del servidor con el JWT del usuario: los secretos de Meta nunca llegan al navegador. */
+  private async api<T>(path: string, body: unknown): Promise<T> {
+    const { data } = await this.db.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) throw new Error('Iniciá sesión');
+    const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
+    const json = (await res.json().catch(() => ({}))) as T & { error?: string };
+    if (!res.ok) throw new Error(json.error ?? `Error ${res.status}`);
+    return json;
+  }
+
+  async connectMeta(organizationId: OrganizationId, adAccountId: string) {
+    return (await this.api<{ url: string }>('/api/integrations/meta/connect', { organizationId, adAccountId })).url;
+  }
+
+  async syncMeta(organizationId: OrganizationId, range: DateRange) {
+    return this.api<{ jobId: string | null; rows: number; skipped: number }>('/api/integrations/meta/sync', { organizationId, from: range.from, to: range.to });
+  }
+
+  async disconnectIntegration(organizationId: OrganizationId, provider: Integration['provider']) {
+    check(await this.db.rpc('disconnect_integration', { p_org: organizationId, p_provider: provider }));
+  }
+
 }
 
 interface QuoteRow {

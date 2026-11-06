@@ -8,16 +8,17 @@ import { PageHead, ScoreBadge, Stat, StatusTag } from '@/components/ui';
 import { formatDay, inRange } from '@/lib/domain/dates';
 import { crmFunnel, derive, formatMoney, formatNumber, formatPercent, metricsInRange, sumMetrics } from '@/lib/domain/metrics';
 import { analyzeCampaign } from '@/lib/domain/recommendations';
+import { dailyBreakdown, missingMetricDays, reconcile } from '@/lib/domain/reconcile';
 import { taskCounts } from '@/lib/domain/tasks';
-import { orgName } from '@/lib/domain/types';
+import { orgName, PLATFORM_LABEL } from '@/lib/domain/types';
 import { useScoped } from '@/lib/state/AppContext';
 import { useFilters } from '@/lib/state/filters';
 
 const PRIORITY_RANK = { high: 0, medium: 1, low: 2 } as const;
 
 export default function CommandCenter() {
-  const { org, range, hrefWithFilters } = useFilters();
-  const { leads, campaigns, metrics, tasks, quotes } = useScoped(org);
+  const { org, range, channel, hrefWithFilters } = useFilters();
+  const { leads, campaigns, metrics, tasks, quotes } = useScoped(org, channel);
   const tc = taskCounts(tasks);
   const pendingQuotes = quotes.filter((q) => q.status === 'pending_approval').length;
 
@@ -36,8 +37,16 @@ export default function CommandCenter() {
       .filter((x) => x.rec.evidence.some((e) => e.metric === 'spend' && Number(e.value) > 0))
       .sort((a, b) => PRIORITY_RANK[a.rec.priority] - PRIORITY_RANK[b.rec.priority]);
     const unassigned = leadsInRange.filter((l) => !l.advisorId && l.status === 'new');
+    const perCampaign = campaigns.map((c) => {
+      const mr = rows.filter((r) => r.organizationId === c.organizationId && r.campaignId === c.id);
+      const cl = leadsInRange.filter((l) => l.organizationId === c.organizationId && l.campaignId === c.id);
+      return { c, gap: reconcile(sumMetrics(mr).platformLeads, cl.length), missing: missingMetricDays(dailyBreakdown(range, mr, [])).length };
+    });
+    const leaking = perCampaign.filter((x) => x.gap.level === 'alert');
+    const missingDays = perCampaign.reduce((a, x) => a + x.missing, 0);
+    const lastMetric = metrics.map((m) => m.date).sort().pop();
     const hot = [...leadsInRange].filter((l) => l.status !== 'won' && l.status !== 'lost').sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 6);
-    return { rows, ads, leadsInRange, funnel, attributed, recs, unassigned, hot };
+    return { rows, ads, leadsInRange, funnel, attributed, recs, unassigned, hot, leaking, missingDays, lastMetric };
   }, [campaigns, leads, metrics, range]);
 
   const top = view.recs[0];
@@ -49,10 +58,14 @@ export default function CommandCenter() {
       <PageHead
         eyebrow="The genetics of your strategy"
         title={org === 'all' ? 'Command Center' : orgName(org)}
-        sub={`Del ${formatDay(range.from)} al ${formatDay(range.to)} · pauta, leads y resultados comerciales en la misma ventana`}
+        sub={`Del ${formatDay(range.from)} al ${formatDay(range.to)}${channel === 'all' ? '' : ` · solo ${PLATFORM_LABEL[channel]}`} · pauta, leads y resultados comerciales en la misma ventana`}
       />
       <div className="stats">
-        <Stat label="Inversión en Ads" value={formatMoney(view.ads.spend, currency)} hint={`${view.rows.length} filas diarias importadas`} />
+        <Stat
+          label="Inversión en Ads"
+          value={formatMoney(view.ads.spend, currency)}
+          hint={`${view.rows.length} filas diarias · métricas hasta ${view.lastMetric ? formatDay(view.lastMetric) : '—'}`}
+        />
         <Stat label="Leads informados por Ads" value={formatNumber(view.ads.platformLeads)} hint={`CPL ${formatMoney(view.ads.cpl, currency)} · CTR ${formatPercent(view.ads.ctr, 2)}`} />
         <Stat
           label="Leads en CRM"
@@ -117,7 +130,19 @@ export default function CommandCenter() {
               {view.unassigned.length > 0 && <Link className="star" href={hrefWithFilters('/leads') + (hrefWithFilters('/leads').includes('?') ? '&' : '?') + 'advisor=none'}>Asignar →</Link>}
             </li>
             <li>
-              <b>{gap > 0 ? gap : 0}</b> leads informados por Ads no tienen correspondencia en el CRM.
+              <b>{gap > 0 ? gap : 0}</b> leads informados por Ads no tienen correspondencia en el CRM
+              {view.leaking.length > 0 && (
+                <>
+                  {' '}· <b className="due-overdue">{view.leaking.length}</b> {view.leaking.length === 1 ? 'campaña' : 'campañas'} con fuga (&gt;25%): {view.leaking.slice(0, 2).map((x) => x.c.name).join(', ')}
+                  {view.leaking.length > 2 ? '…' : ''}{' '}
+                  <Link className="star" href={hrefWithFilters('/campaigns')}>Ver →</Link>
+                </>
+              )}
+              .
+            </li>
+            <li>
+              <b>{view.missingDays}</b> días sin métricas importadas dentro del período en campañas con datos.{' '}
+              {view.missingDays > 0 && <Link className="star" href={hrefWithFilters('/integrations')}>Importar →</Link>}
             </li>
             <li>
               <b>{view.leadsInRange.filter((l) => !l.phoneE164).length}</b> leads sin teléfono válido.

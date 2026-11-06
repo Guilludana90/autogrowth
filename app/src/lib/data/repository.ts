@@ -1,8 +1,12 @@
 import type { ImportPreview } from '../domain/leadImport';
+import type { MetricImportPreview } from '../domain/metricImport';
 import type { QuoteAction } from '../domain/quotes';
 import type {
   Advisor,
   Campaign,
+  DateRange,
+  Integration,
+  MetricImportJob,
   CampaignMetricsDaily,
   Lead,
   LeadActivity,
@@ -118,5 +122,14 @@ export interface Repository {
   listMembers(): Promise<Member[]>;
   addMember(organizationId: OrganizationId, email: string, role: Role): Promise<Member>;
   removeMember(organizationId: OrganizationId, userId: string): Promise<void>;
+  // P2
+  listMetricImports(): Promise<MetricImportJob[]>;
+  applyMetricImport(preview: MetricImportPreview, fileName: string): Promise<MetricImportJob>;
+  rollbackMetricImport(jobId: string): Promise<void>;
+  listIntegrations(): Promise<Integration[]>;
+  /** Devuelve la URL del diálogo OAuth de Meta (la arma el servidor). */
+  connectMeta(organizationId: OrganizationId, adAccountId: string): Promise<string>;
+  syncMeta(organizationId: OrganizationId, range: DateRange): Promise<{ jobId: string | null; rows: number; skipped: number }>;
+  disconnectIntegration(organizationId: OrganizationId, provider: Integration['provider']): Promise<void>;
   resetDemo?(): Promise<void>;
 }

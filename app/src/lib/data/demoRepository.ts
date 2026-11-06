@@ -1,9 +1,11 @@
 import { toDay } from '../domain/dates';
 import type { ImportPreview } from '../domain/leadImport';
+import type { MetricImportPreview } from '../domain/metricImport';
 import { normalizeEmail } from '../domain/phone';
 import { nextStatus, validUntil, type QuoteAction } from '../domain/quotes';
 import { scoreLead } from '../domain/scoring';
-import type { Lead, LeadActivity, Member, OrganizationId, PriceDocument, Quote, Role, Task } from '../domain/types';
+import type { Campaign, CampaignMetricsDaily, Integration, Lead, LeadActivity, Member, MetricImportJob, OrganizationId, PriceDocument, Quote, Role, Task } from '../domain/types';
+import { ORGANIZATIONS } from '../domain/types';
 import { STATUS_LABEL } from '../domain/types';
 import { DEMO_CAMPAIGNS, demoLeads, demoMetrics } from '../demo/seed';
 import { DEMO_MEMBERS, DEMO_USER_ID, demoPriceDocuments, demoQuotes, demoTasks } from '../demo/seedP1';
@@ -19,7 +21,18 @@ import type {
   TaskPatch,
 } from './repository';
 
-const KEY = 'autogrowth:demo:v3';
+const KEY = 'autogrowth:demo:v4';
+
+interface DemoMetricJob extends MetricImportJob {
+  previous: CampaignMetricsDaily[];
+  createdKeys: string[];
+  createdCampaigns: string[];
+}
+
+const mkey = (m: Pick<CampaignMetricsDaily, 'organizationId' | 'platform' | 'campaignId' | 'date'>) =>
+  `${m.organizationId}|${m.platform}|${m.campaignId}|${m.date}`;
+const ckey = (c: { organizationId: string; platform: string; id: string }) => `${c.organizationId}|${c.platform}|${c.id}`;
+const DEMO_OFF = 'Modo demo: la conexión con Meta está desactivada. Se habilita en un entorno con Supabase y una app de Meta de desarrollo.';
 
 interface DemoState {
   seededOn: string;
@@ -30,6 +43,9 @@ interface DemoState {
   quotes: Quote[];
   priceDocs: PriceDocument[];
   members: Member[];
+  campaigns: Campaign[];
+  metrics: CampaignMetricsDaily[];
+  metricJobs: DemoMetricJob[];
 }
 
 function readStorage(): DemoState | null {
@@ -67,8 +83,12 @@ export class DemoRepository implements Repository {
   }
 
   private fresh(): DemoState {
-    const leads = demoLeads(this.today);
+    const metrics = demoMetrics(this.today);
+    const leads = demoLeads(this.today, metrics);
     return {
+      campaigns: DEMO_CAMPAIGNS,
+      metrics,
+      metricJobs: [],
       seededOn: this.today,
       leads,
       imports: [],
@@ -193,11 +213,100 @@ export class DemoRepository implements Repository {
   }
 
   async listCampaigns() {
-    return DEMO_CAMPAIGNS;
+    return clone(this.state.campaigns);
   }
 
   async listMetrics() {
-    return demoMetrics(this.today);
+    return clone(this.state.metrics);
+  }
+
+  // ───────────── P2 ─────────────
+
+  async listMetricImports(): Promise<MetricImportJob[]> {
+    return this.state.metricJobs.map(({ previous: _p, createdKeys: _k, createdCampaigns: _c, ...j }) => clone(j));
+  }
+
+  async applyMetricImport(preview: MetricImportPreview, fileName: string) {
+    const rows = preview.outcomes.filter((o) => o.kind !== 'unchanged');
+    if (!preview.outcomes.length) throw new Error('No hay filas para importar');
+    if (preview.outcomes.some((o) => o.metric.date > this.today)) throw new Error('Hay fechas futuras');
+    const index = new Map(this.state.metrics.map((m, i) => [mkey(m), i]));
+    const known = new Set(this.state.campaigns.map(ckey));
+    const job: DemoMetricJob = {
+      id: uid(),
+      organizationId: preview.organizationId,
+      platform: preview.platform,
+      source: 'csv',
+      fileName,
+      rangeFrom: preview.range?.from,
+      rangeTo: preview.range?.to,
+      counts: { create: 0, update: 0, unchanged: preview.counts.unchanged, campaigns: 0 },
+      createdAt: new Date().toISOString(),
+      createdByName: 'Usuario demo',
+      rolledBack: false,
+      previous: [],
+      createdKeys: [],
+      createdCampaigns: [],
+    };
+    for (const o of rows) {
+      const k = mkey(o.metric);
+      const i = index.get(k);
+      if (i === undefined) {
+        this.state.metrics.push(clone(o.metric));
+        job.createdKeys.push(k);
+        job.counts.create++;
+      } else {
+        job.previous.push(clone(this.state.metrics[i]!));
+        this.state.metrics[i] = clone(o.metric);
+        job.counts.update++;
+      }
+    }
+    for (const o of preview.outcomes) {
+      const c = { organizationId: o.metric.organizationId, platform: o.metric.platform, id: o.metric.campaignId };
+      if (known.has(ckey(c))) continue;
+      known.add(ckey(c));
+      this.state.campaigns.push({ ...c, name: o.campaignName, objective: '', status: 'active', currency: o.metric.currency });
+      job.createdCampaigns.push(ckey(c));
+      job.counts.campaigns++;
+    }
+    this.state.metricJobs.unshift(job);
+    this.commit();
+    return (await this.listMetricImports())[0]!;
+  }
+
+  async rollbackMetricImport(jobId: string) {
+    const job = this.state.metricJobs.find((j) => j.id === jobId);
+    if (!job) throw new Error('Lote inexistente');
+    if (job.rolledBack) throw new Error('El lote ya fue revertido');
+    const later = this.state.metricJobs.some(
+      (j) => j.organizationId === job.organizationId && j.platform === job.platform && !j.rolledBack && j.createdAt > job.createdAt,
+    );
+    if (later) throw new Error('Hay lotes posteriores de la misma plataforma: revertí primero el más reciente');
+    const created = new Set(job.createdKeys);
+    this.state.metrics = this.state.metrics.filter((m) => !created.has(mkey(m)));
+    const prev = new Map(job.previous.map((m) => [mkey(m), m]));
+    this.state.metrics = this.state.metrics.map((m) => prev.get(mkey(m)) ?? m);
+    const withMetrics = new Set(this.state.metrics.map((m) => ckey({ ...m, id: m.campaignId })));
+    const dropped = new Set(job.createdCampaigns.filter((k) => !withMetrics.has(k)));
+    this.state.campaigns = this.state.campaigns.filter((c) => !dropped.has(ckey(c)));
+    job.rolledBack = true;
+    this.commit();
+  }
+
+  async listIntegrations(): Promise<Integration[]> {
+    return ORGANIZATIONS.map((o) => ({ organizationId: o.id, provider: 'meta' as const, status: 'not_connected' as const }));
+  }
+
+  async connectMeta(): Promise<string> {
+    throw new Error(DEMO_OFF);
+  }
+
+  async syncMeta(): Promise<{ jobId: string | null; rows: number; skipped: number }> {
+    throw new Error(DEMO_OFF);
+  }
+
+  async disconnectIntegration() {
+    throw new Error(DEMO_OFF);
   }
 
   // ───────────── P1 ─────────────
