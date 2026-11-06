@@ -1,4 +1,4 @@
-# AutoGrowth OS · app (fases P0 + P1)
+# AutoGrowth OS · app (fases P0 + P1 + P2)
 
 Aplicación Next.js + TypeScript que reemplaza gradualmente al prototipo estático de `../dist/` (que queda intacto como referencia).
 
@@ -17,10 +17,10 @@ Por defecto `NEXT_PUBLIC_DEMO_MODE=true`: datos ficticios guardados en el navega
 | Comando | Qué prueba |
 |---|---|
 | `npm run typecheck` | TypeScript estricto |
-| `npm test` | Dominio: métricas, rangos, finanzas (francés, plan de ahorro, usados), recomendaciones, importador CSV, teléfonos, permisos, datos demo, tareas (vencimientos/orden), cotizaciones (transiciones, autoaprobación, vigencia), listas de precios |
-| `npm run test:db` | Levanta un Postgres temporal, aplica `supabase/migrations/*` y corre `supabase/tests/*_test.sql` (aislamiento por organización, roles, governance de prompts, auditoría; en P1: tareas, historial, cotizaciones con aprobación, listas de precios, alta de miembros) |
+| `npm test` | Dominio: métricas, rangos, finanzas (francés, plan de ahorro, usados), recomendaciones, importador CSV, teléfonos, permisos, datos demo, tareas (vencimientos/orden), cotizaciones (transiciones, autoaprobación, vigencia), listas de precios, importador de métricas (Meta/Google CSV, es/en), conciliación Ads↔CRM, normalización de Meta Insights, state OAuth firmado |
+| `npm run test:db` | Levanta un Postgres temporal, aplica `supabase/migrations/*` y corre `supabase/tests/*_test.sql` (aislamiento por organización, roles, governance de prompts, auditoría; en P1: tareas, historial, cotizaciones con aprobación, listas de precios, alta de miembros; en P2: lotes de métricas transaccionales y reversibles, integraciones y tokens inaccesibles desde la API) |
 | `npm run build` | Build de producción |
-| `npm run test:e2e` | Con la app corriendo (`BASE_URL=…`): rutas, filtros globales, alta/validación, motivo de pérdida, importación idempotente + rollback, roles, mobile, sin requests externas. `e2e/p1.mjs`: ficha del lead, tareas, listas de precios, flujo de aprobación de cotizaciones, propuesta imprimible, usuarios y roles |
+| `npm run test:e2e` | Con la app corriendo (`BASE_URL=…`): rutas, filtros globales, alta/validación, motivo de pérdida, importación idempotente + rollback, roles, mobile, sin requests externas. `e2e/p1.mjs`: ficha del lead, tareas, listas de precios, flujo de aprobación de cotizaciones, propuesta imprimible, usuarios y roles. `e2e/p2.mjs`: importación de métricas, idempotencia, detalle de campaña, canal, lotes y reversión, Meta apagada en demo |
 
 ## Conectar Supabase (solo desarrollo local hasta autorización)
 
@@ -62,9 +62,26 @@ Lo que figura en el menú con etiqueta P1–P4 está planificado y no es un link
 - Migración `supabase/migrations/0003_sales_ops.sql`: `lead_activities`, extensiones de `tasks`, `price_documents`, `quotes` con numeración por organización, RPCs `quote_transition`, `activate_price_document`, `add_member_by_email`, auditoría por triggers.
 - Los precios de las listas demo son **ficticios**; no son precios comerciales.
 
+## Qué incluye P2
+
+- **Importar métricas** (Campañas o Canales conectados): CSV de Meta Ads Manager o Google Ads, en español o inglés, con desglose por día. Detecta plataforma y moneda, suma filas por anuncio al total diario de la campaña, rechaza filas de varios días, fechas futuras y valores inválidos, y muestra qué es nuevo, qué corrige y qué no cambia. Al confirmar se guarda un lote; reimportar el mismo archivo no cambia nada.
+- **Lotes reversibles**: se revierte el más reciente de cada plataforma; restaura valores anteriores y borra las campañas que creó el lote. En Supabase la importación es una sola RPC transaccional (`import_campaign_metrics`) y nadie escribe métricas fuera de un lote.
+- **Conciliación Ads ↔ CRM**: columna en Campañas (Concilia / Revisar / Fuga) con umbrales en `src/lib/domain/reconcile.ts` (10% y 25%, ignora diferencias de ±2). El Command Center avisa campañas con fuga, días sin métricas y hasta qué fecha hay datos.
+- **Filtro global de canal** (`?ch=meta|google`) en Command Center, Campañas y detalle; se conserva al navegar.
+- **Detalle de campaña** (`/campaigns/view`): KPIs, CPL de plataforma vs. CPL real (sobre leads del CRM), costo por venta, gráfico diario, diagnóstico y desglose diario exportable. Los días sin métricas se marcan, no se estiman.
+- **Métricas por canal** (`/channels`): Meta vs. Google por concesionario, sin mezclar cuentas.
+- **Meta en sandbox** (`/integrations` + `src/app/api/integrations/meta/*`): OAuth con `ads_read`, state firmado (HMAC, 10 min), canje del código y token de larga duración en el servidor, `appsecret_proof`, prueba real de la cuenta antes de marcarla conectada, sincronización de Insights por día con la identidad del usuario. Solo cuentas listadas en `META_ALLOWED_AD_ACCOUNTS`. Los tokens viven en `integration_secrets` (sin acceso para usuarios). En modo demo todo esto responde 503 y la UI lo muestra desactivado.
+- Migración `supabase/migrations/0004_campaign_intelligence.sql`.
+
+### Probar Meta en sandbox (no se hizo todavía)
+
+1. Crear una app de Meta en modo desarrollo con el producto Marketing API y agregar `META_REDIRECT_URI` como URI de redirección válida.
+2. Completar las variables de Meta en `.env.local` (ver `.env.example`), con `NEXT_PUBLIC_DEMO_MODE=false` y Supabase local.
+3. En Canales conectados, ingresar la cuenta `act_…` autorizada y conectar. Solo queda "Conectada y probada" si Meta responde la consulta de la cuenta.
+
 ## Pendiente (siguientes fases)
 
-- P2: importador de métricas, Meta Ads en sandbox.
+- P2 restante: probar Meta contra una app y cuenta reales de sandbox (requiere credenciales y autorización); Lead Ads y CAPI; Google Ads API; refresco programado de la sincronización.
 - P3: IA generativa opcional sobre el motor de reglas, feedback persistente, pantalla de AI Governance (la base ya está).
 - P4: postventa, inbox, WhatsApp con consentimiento.
-- En Supabase, la importación hace varias llamadas seguidas; conviene moverla a una RPC transaccional antes de usarla con datos reales.
+- En Supabase, la importación de **leads** todavía hace varias llamadas seguidas (la de métricas ya es transaccional); conviene moverla a una RPC antes de usarla con datos reales.

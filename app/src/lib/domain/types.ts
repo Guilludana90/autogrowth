@@ -203,3 +203,42 @@ export interface Member {
   organizationId: OrganizationId;
   role: Role;
 }
+
+// ───────────── P2 ─────────────
+
+export type MetricSource = 'csv' | 'meta_api';
+
+export interface MetricImportJob {
+  id: string;
+  organizationId: OrganizationId;
+  platform: Platform;
+  source: MetricSource;
+  fileName: string;
+  rangeFrom?: string;
+  rangeTo?: string;
+  counts: { create: number; update: number; unchanged: number; campaigns: number };
+  createdAt: string;
+  createdByName?: string;
+  rolledBack: boolean;
+}
+
+export type IntegrationStatus = 'not_connected' | 'connected' | 'error' | 'revoked';
+
+export interface Integration {
+  organizationId: OrganizationId;
+  provider: Platform;
+  status: IntegrationStatus;
+  externalAccountId?: string;
+  externalAccountName?: string;
+  currency?: string;
+  lastTestedAt?: string;
+  lastSyncAt?: string;
+  lastError?: string;
+}
+
+export const INTEGRATION_STATUS_LABEL: Record<IntegrationStatus, [string, 'green' | 'gold' | 'red' | 'gray']> = {
+  not_connected: ['No conectada', 'gray'],
+  connected: ['Conectada y probada', 'green'],
+  error: ['Error', 'red'],
+  revoked: ['Desconectada', 'gray'],
+};
