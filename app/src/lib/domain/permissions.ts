@@ -9,7 +9,15 @@ export type Action =
   | 'campaign:import'
   | 'integration:manage'
   | 'prompt:draft'
-  | 'prompt:approve';
+  | 'prompt:approve'
+  | 'note:write'
+  | 'task:write'
+  | 'quote:read'
+  | 'quote:write'
+  | 'quote:approve'
+  | 'pricedoc:manage'
+  | 'member:read'
+  | 'member:manage';
 
 /**
  * Permisos de UI por rol. Las escrituras además las valida RLS en supabase/migrations;
@@ -25,7 +33,22 @@ const MATRIX: Record<Action, readonly Role[]> = {
   'integration:manage': ['super_admin', 'dealership_admin'],
   'prompt:draft': ['super_admin', 'dealership_admin'],
   'prompt:approve': ['super_admin'],
+  'note:write': ['super_admin', 'dealership_admin', 'sales_advisor', 'post_sales'],
+  'task:write': ['super_admin', 'dealership_admin', 'sales_advisor', 'post_sales'],
+  'quote:read': ['super_admin', 'dealership_admin', 'sales_advisor', 'read_only'],
+  'quote:write': ['super_admin', 'dealership_admin', 'sales_advisor'],
+  'quote:approve': ['super_admin', 'dealership_admin'],
+  'pricedoc:manage': ['super_admin', 'dealership_admin'],
+  'member:read': ['super_admin', 'dealership_admin'],
+  'member:manage': ['super_admin', 'dealership_admin'],
 };
+
+/** Roles que un rol puede otorgar (espejo de memberships_insert y add_member_by_email). */
+export function grantableRoles(role: Role): Role[] {
+  if (role === 'super_admin') return ['super_admin', 'dealership_admin', 'sales_advisor', 'post_sales', 'read_only'];
+  if (role === 'dealership_admin') return ['sales_advisor', 'post_sales', 'read_only'];
+  return [];
+}
 
 export function can(role: Role, action: Action): boolean {
   return MATRIX[action].includes(role);

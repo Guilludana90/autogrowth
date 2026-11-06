@@ -97,3 +97,109 @@ export function orgName(id: OrganizationId): string {
 export function isOrganizationId(v: unknown): v is OrganizationId {
   return ORGANIZATIONS.some((o) => o.id === v);
 }
+
+// ───────────── P1: operación comercial ─────────────
+
+export const TASK_PRIORITIES = ['high', 'normal', 'low'] as const;
+export type TaskPriority = (typeof TASK_PRIORITIES)[number];
+export const TASK_STATUSES = ['pending', 'in_progress', 'done'] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+export interface Task {
+  id: string;
+  organizationId: OrganizationId;
+  leadId?: string;
+  title: string;
+  notes?: string;
+  priority: TaskPriority;
+  status: TaskStatus;
+  dueAt?: string; // ISO
+  assigneeId?: string;
+  createdAt: string;
+  completedAt?: string;
+}
+
+export const TASK_PRIORITY_LABEL: Record<TaskPriority, string> = { high: 'Alta', normal: 'Normal', low: 'Baja' };
+export const TASK_STATUS_LABEL: Record<TaskStatus, string> = { pending: 'Pendiente', in_progress: 'En curso', done: 'Completada' };
+
+export type ActivityKind = 'created' | 'status' | 'assigned' | 'note' | 'task' | 'quote' | 'import';
+export interface LeadActivity {
+  id: string;
+  organizationId: OrganizationId;
+  leadId: string;
+  kind: ActivityKind;
+  body: string;
+  actorName?: string;
+  createdAt: string;
+}
+
+export const PRICE_DOC_CATEGORIES = ['price_list', 'savings_plan', 'factory_financing', 'agreement', 'other'] as const;
+export type PriceDocCategory = (typeof PRICE_DOC_CATEGORIES)[number];
+export const PRICE_DOC_CATEGORY_LABEL: Record<PriceDocCategory, string> = {
+  price_list: 'Lista de precios',
+  savings_plan: 'Plan de ahorro (PDA)',
+  factory_financing: 'Financiación de fábrica',
+  agreement: 'Acuerdo / convenio',
+  other: 'Otro',
+};
+
+export interface PriceRow {
+  model: string;
+  version: string;
+  price: number;
+}
+
+export interface PriceDocument {
+  id: string;
+  organizationId: OrganizationId;
+  category: PriceDocCategory;
+  title: string;
+  fileName: string;
+  validFrom: string; // YYYY-MM-DD
+  validTo?: string;
+  rows: PriceRow[];
+  status: 'draft' | 'active' | 'archived';
+  createdAt: string;
+}
+
+export type QuoteKind = 'used' | 'savings' | 'financing';
+export type QuoteStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected';
+export const QUOTE_KIND_LABEL: Record<QuoteKind, string> = {
+  used: 'Toma de usado',
+  savings: 'Plan de ahorro',
+  financing: 'Financiación',
+};
+export const QUOTE_STATUS_LABEL: Record<QuoteStatus, string> = {
+  draft: 'Borrador',
+  pending_approval: 'Pendiente de aprobación',
+  approved: 'Aprobada',
+  rejected: 'Rechazada',
+};
+
+export interface Quote {
+  id: string;
+  organizationId: OrganizationId;
+  number: number;
+  leadId?: string;
+  kind: QuoteKind;
+  vehicle: string;
+  input: Record<string, number | string>;
+  result: Record<string, number | undefined>;
+  priceDocumentId?: string;
+  status: QuoteStatus;
+  validUntil: string; // YYYY-MM-DD
+  createdBy: string;
+  createdByName?: string;
+  decidedByName?: string;
+  decidedAt?: string;
+  decidedReason?: string;
+  createdAt: string;
+}
+
+export interface Member {
+  userId: string;
+  name: string;
+  email?: string;
+  organizationId: OrganizationId;
+  role: Role;
+}

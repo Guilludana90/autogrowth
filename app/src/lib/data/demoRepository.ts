@@ -1,16 +1,35 @@
 import { toDay } from '../domain/dates';
 import type { ImportPreview } from '../domain/leadImport';
+import { normalizeEmail } from '../domain/phone';
+import { nextStatus, validUntil, type QuoteAction } from '../domain/quotes';
 import { scoreLead } from '../domain/scoring';
-import type { Lead } from '../domain/types';
-import { DEMO_ADVISORS, DEMO_CAMPAIGNS, demoLeads, demoMetrics } from '../demo/seed';
-import type { ImportJob, LeadPatch, NewLeadInput, Repository, Session } from './repository';
+import type { Lead, LeadActivity, Member, OrganizationId, PriceDocument, Quote, Role, Task } from '../domain/types';
+import { STATUS_LABEL } from '../domain/types';
+import { DEMO_CAMPAIGNS, demoLeads, demoMetrics } from '../demo/seed';
+import { DEMO_MEMBERS, DEMO_USER_ID, demoPriceDocuments, demoQuotes, demoTasks } from '../demo/seedP1';
+import type {
+  ImportJob,
+  LeadPatch,
+  NewLeadInput,
+  NewPriceDocumentInput,
+  NewQuoteInput,
+  NewTaskInput,
+  Repository,
+  Session,
+  TaskPatch,
+} from './repository';
 
-const KEY = 'autogrowth:demo:v2';
+const KEY = 'autogrowth:demo:v3';
 
 interface DemoState {
   seededOn: string;
   leads: Lead[];
   imports: ImportJob[];
+  activities: LeadActivity[];
+  tasks: Task[];
+  quotes: Quote[];
+  priceDocs: PriceDocument[];
+  members: Member[];
 }
 
 function readStorage(): DemoState | null {
@@ -31,9 +50,11 @@ function writeStorage(s: DemoState) {
 }
 
 const uid = () => globalThis.crypto?.randomUUID?.() ?? `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const clone = <T,>(v: T): T => structuredClone(v);
 
 /**
  * Repositorio de DEMO_MODE: datos ficticios en el navegador. No hace ninguna llamada de red.
+ * Replica las reglas de la base (dedupe, asesor de la misma org, historial, numeración y aprobación de cotizaciones).
  */
 export class DemoRepository implements Repository {
   readonly mode = 'demo' as const;
@@ -46,19 +67,45 @@ export class DemoRepository implements Repository {
   }
 
   private fresh(): DemoState {
-    return { seededOn: this.today, leads: demoLeads(this.today), imports: [] };
+    const leads = demoLeads(this.today);
+    return {
+      seededOn: this.today,
+      leads,
+      imports: [],
+      activities: [],
+      tasks: demoTasks(this.today, leads),
+      quotes: demoQuotes(this.today, leads),
+      priceDocs: demoPriceDocuments(this.today),
+      members: DEMO_MEMBERS,
+    };
   }
 
   private commit() {
     writeStorage(this.state);
   }
 
+  private memberName(userId?: string) {
+    return this.state.members.find((m) => m.userId === userId)?.name;
+  }
+
+  private log(lead: Pick<Lead, 'id' | 'organizationId'>, kind: LeadActivity['kind'], body: string, actor = true) {
+    this.state.activities.unshift({
+      id: uid(),
+      organizationId: lead.organizationId,
+      leadId: lead.id,
+      kind,
+      body,
+      actorName: actor ? 'Usuario demo' : undefined,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
   async getSession(): Promise<Session> {
-    return { userName: 'Usuario demo', roles: { cardys_fiat: 'super_admin', overland_motors: 'super_admin' } };
+    return { userId: DEMO_USER_ID, userName: 'Usuario demo', roles: { cardys_fiat: 'super_admin', overland_motors: 'super_admin' } };
   }
 
   async listLeads() {
-    return structuredClone(this.state.leads);
+    return clone(this.state.leads);
   }
 
   async createLead(input: NewLeadInput) {
@@ -72,26 +119,34 @@ export class DemoRepository implements Repository {
     const { score, reason } = scoreLead(input);
     const lead: Lead = { id: uid(), ...input, score, scoreReason: reason, status: 'new', createdAt: now, updatedAt: now };
     this.state.leads.unshift(lead);
+    this.log(lead, 'created', `Lead creado (origen: ${lead.source})`);
     this.commit();
-    return structuredClone(lead);
+    return clone(lead);
   }
 
   async updateLead(id: string, patch: LeadPatch) {
     const lead = this.state.leads.find((l) => l.id === id);
     if (!lead) throw new Error('Lead inexistente');
     if (patch.status === 'lost' && !patch.lostReason?.trim()) throw new Error('Indicá el motivo de pérdida');
-    if (patch.status !== undefined) lead.status = patch.status;
-    if (patch.status !== undefined && patch.status !== 'lost') delete lead.lostReason;
-    if (patch.lostReason) lead.lostReason = patch.lostReason.trim();
-    if (patch.advisorId !== undefined) {
+    if (patch.advisorId) {
+      const ok = this.state.members.some((m) => m.userId === patch.advisorId && m.organizationId === lead.organizationId);
+      if (!ok) throw new Error('El asesor no pertenece a este concesionario');
+    }
+    if (patch.status !== undefined && patch.status !== lead.status) {
+      const reason = patch.status === 'lost' ? ` (${patch.lostReason!.trim()})` : '';
+      this.log(lead, 'status', `Estado: ${STATUS_LABEL[lead.status]} → ${STATUS_LABEL[patch.status]}${reason}`);
+      lead.status = patch.status;
+      if (patch.status === 'lost') lead.lostReason = patch.lostReason!.trim();
+      else delete lead.lostReason;
+    }
+    if (patch.advisorId !== undefined && (patch.advisorId ?? undefined) !== lead.advisorId) {
       if (patch.advisorId === null) delete lead.advisorId;
-      else if (!DEMO_ADVISORS.some((a) => a.id === patch.advisorId && a.organizationId === lead.organizationId)) {
-        throw new Error('El asesor no pertenece a este concesionario');
-      } else lead.advisorId = patch.advisorId;
+      else lead.advisorId = patch.advisorId;
+      this.log(lead, 'assigned', patch.advisorId ? `Asignado a ${this.memberName(patch.advisorId) ?? 'asesor'}` : 'Asesor quitado');
     }
     lead.updatedAt = new Date().toISOString();
     this.commit();
-    return structuredClone(lead);
+    return clone(lead);
   }
 
   async applyImport(preview: ImportPreview, fileName: string) {
@@ -100,6 +155,7 @@ export class DemoRepository implements Repository {
       if (o.kind === 'create') {
         this.state.leads.unshift(o.lead);
         job.createdLeadIds.push(o.lead.id);
+        this.log(o.lead, 'import', `Lead importado desde ${fileName}`);
       } else if (o.kind === 'update') {
         const lead = this.state.leads.find((l) => l.id === o.leadId);
         if (!lead) continue;
@@ -109,7 +165,7 @@ export class DemoRepository implements Repository {
     }
     this.state.imports.unshift(job);
     this.commit();
-    return structuredClone(job);
+    return clone(job);
   }
 
   async rollbackImport(jobId: string) {
@@ -117,6 +173,7 @@ export class DemoRepository implements Repository {
     if (!job || job.rolledBack) return;
     const created = new Set(job.createdLeadIds);
     this.state.leads = this.state.leads.filter((l) => !created.has(l.id));
+    this.state.activities = this.state.activities.filter((a) => !created.has(a.leadId));
     for (const [id, prev] of Object.entries(job.previous)) {
       const lead = this.state.leads.find((l) => l.id === id);
       if (lead) Object.assign(lead, prev);
@@ -126,11 +183,13 @@ export class DemoRepository implements Repository {
   }
 
   async listImportJobs() {
-    return structuredClone(this.state.imports);
+    return clone(this.state.imports);
   }
 
   async listAdvisors() {
-    return DEMO_ADVISORS;
+    return this.state.members
+      .filter((m) => m.role === 'sales_advisor' || m.role === 'dealership_admin')
+      .map((m) => ({ id: m.userId, name: m.name, organizationId: m.organizationId }));
   }
 
   async listCampaigns() {
@@ -139,6 +198,167 @@ export class DemoRepository implements Repository {
 
   async listMetrics() {
     return demoMetrics(this.today);
+  }
+
+  // ───────────── P1 ─────────────
+
+  async listActivities(leadId: string) {
+    const lead = this.state.leads.find((l) => l.id === leadId);
+    if (!lead) return [];
+    const list = this.state.activities.filter((a) => a.leadId === leadId);
+    // Los leads sembrados no tienen evento de alta: se deriva de createdAt (no se inventan otros eventos).
+    if (!list.some((a) => a.kind === 'created' || a.kind === 'import')) {
+      list.push({ id: `created-${lead.id}`, organizationId: lead.organizationId, leadId, kind: 'created', body: `Lead creado (origen: ${lead.source})`, createdAt: lead.createdAt });
+    }
+    return clone(list.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+  }
+
+  async addNote(leadId: string, body: string) {
+    const lead = this.state.leads.find((l) => l.id === leadId);
+    if (!lead) throw new Error('Lead inexistente');
+    const text = body.trim();
+    if (!text || text.length > 2000) throw new Error('La nota debe tener entre 1 y 2000 caracteres');
+    this.log(lead, 'note', text);
+    this.commit();
+    return clone(this.state.activities[0]!);
+  }
+
+  async listTasks() {
+    return clone(this.state.tasks);
+  }
+
+  private checkTaskRefs(t: Pick<Task, 'organizationId' | 'leadId' | 'assigneeId'>) {
+    if (t.leadId && !this.state.leads.some((l) => l.id === t.leadId && l.organizationId === t.organizationId)) {
+      throw new Error('El lead no pertenece a este concesionario');
+    }
+    if (t.assigneeId && !this.state.members.some((m) => m.userId === t.assigneeId && m.organizationId === t.organizationId)) {
+      throw new Error('El responsable no pertenece a este concesionario');
+    }
+  }
+
+  async createTask(input: NewTaskInput) {
+    const title = input.title.trim();
+    if (title.length < 2 || title.length > 200) throw new Error('El título debe tener entre 2 y 200 caracteres');
+    this.checkTaskRefs(input);
+    const task: Task = { id: uid(), ...input, title, status: 'pending', createdAt: new Date().toISOString() };
+    this.state.tasks.unshift(task);
+    const lead = this.state.leads.find((l) => l.id === input.leadId);
+    if (lead) this.log(lead, 'task', `Tarea creada: ${title}`);
+    this.commit();
+    return clone(task);
+  }
+
+  async updateTask(id: string, patch: TaskPatch) {
+    const t = this.state.tasks.find((x) => x.id === id);
+    if (!t) throw new Error('Tarea inexistente');
+    const next = { ...t, ...patch, assigneeId: patch.assigneeId === null ? undefined : (patch.assigneeId ?? t.assigneeId), dueAt: patch.dueAt === null ? undefined : (patch.dueAt ?? t.dueAt) };
+    this.checkTaskRefs(next);
+    if (next.status === 'done' && t.status !== 'done') {
+      next.completedAt = new Date().toISOString();
+      const lead = this.state.leads.find((l) => l.id === t.leadId);
+      if (lead) this.log(lead, 'task', `Tarea completada: ${t.title}`);
+    }
+    if (next.status !== 'done') delete next.completedAt;
+    Object.assign(t, next);
+    this.commit();
+    return clone(t);
+  }
+
+  async listQuotes() {
+    return clone(this.state.quotes);
+  }
+
+  async createQuote(input: NewQuoteInput) {
+    if (input.leadId && !this.state.leads.some((l) => l.id === input.leadId && l.organizationId === input.organizationId)) {
+      throw new Error('El lead no pertenece a este concesionario');
+    }
+    if (input.vehicle.trim().length < 2) throw new Error('Indicá el vehículo');
+    const number = Math.max(0, ...this.state.quotes.filter((q) => q.organizationId === input.organizationId).map((q) => q.number)) + 1;
+    const quote: Quote = {
+      id: uid(),
+      ...input,
+      vehicle: input.vehicle.trim(),
+      number,
+      status: 'draft',
+      validUntil: validUntil(this.today),
+      createdBy: DEMO_USER_ID,
+      createdByName: 'Usuario demo',
+      createdAt: new Date().toISOString(),
+    };
+    this.state.quotes.unshift(quote);
+    this.commit();
+    return clone(quote);
+  }
+
+  async transitionQuote(id: string, action: QuoteAction, reason?: string) {
+    const q = this.state.quotes.find((x) => x.id === id);
+    if (!q) throw new Error('Cotización inexistente');
+    if (action === 'reject' && !reason?.trim()) throw new Error('El rechazo requiere un motivo');
+    // Los permisos por rol los valida AppContext con canTransition (mismas reglas que quote_transition()).
+    q.status = nextStatus(action);
+    if (action === 'submit') {
+      delete q.decidedByName;
+      delete q.decidedAt;
+      delete q.decidedReason;
+    } else {
+      q.decidedByName = 'Usuario demo';
+      q.decidedAt = new Date().toISOString();
+      q.decidedReason = reason?.trim() || undefined;
+      if (action === 'approve' && q.validUntil < this.today) q.validUntil = this.today;
+    }
+    const lead = this.state.leads.find((l) => l.id === q.leadId);
+    if (lead) {
+      const what = action === 'submit' ? 'enviada a aprobación' : action === 'approve' ? 'aprobada' : `rechazada (${reason!.trim()})`;
+      this.log(lead, 'quote', `Cotización #${q.number} · ${q.vehicle}: ${what}`);
+    }
+    this.commit();
+    return clone(q);
+  }
+
+  async listPriceDocuments() {
+    return clone(this.state.priceDocs);
+  }
+
+  async createPriceDocument(input: NewPriceDocumentInput) {
+    if (input.validTo && input.validTo < input.validFrom) throw new Error('La vigencia termina antes de empezar');
+    const doc: PriceDocument = { id: uid(), ...input, status: 'draft', createdAt: new Date().toISOString() };
+    this.state.priceDocs.unshift(doc);
+    this.commit();
+    return clone(doc);
+  }
+
+  async activatePriceDocument(id: string) {
+    const d = this.state.priceDocs.find((x) => x.id === id);
+    if (!d) throw new Error('Documento inexistente');
+    for (const other of this.state.priceDocs) {
+      if (other.organizationId === d.organizationId && other.category === d.category && other.status === 'active') other.status = 'archived';
+    }
+    d.status = 'active';
+    this.commit();
+    return clone(d);
+  }
+
+  async listMembers() {
+    return clone(this.state.members);
+  }
+
+  async addMember(organizationId: OrganizationId, email: string, role: Role) {
+    const e = normalizeEmail(email);
+    if (!e) throw new Error('Email inválido');
+    const existing = this.state.members.find((m) => m.email === e);
+    const member: Member = { userId: existing?.userId ?? uid(), name: existing?.name ?? e.split('@')[0]!, email: e, organizationId, role };
+    this.state.members = this.state.members.filter((m) => !(m.userId === member.userId && m.organizationId === organizationId));
+    this.state.members.push(member);
+    this.commit();
+    return clone(member);
+  }
+
+  async removeMember(organizationId: OrganizationId, userId: string) {
+    if (userId === DEMO_USER_ID) throw new Error('No podés quitarte a vos mismo');
+    this.state.members = this.state.members.filter((m) => !(m.userId === userId && m.organizationId === organizationId));
+    for (const l of this.state.leads) if (l.organizationId === organizationId && l.advisorId === userId) delete l.advisorId;
+    for (const t of this.state.tasks) if (t.organizationId === organizationId && t.assigneeId === userId) delete t.assigneeId;
+    this.commit();
   }
 
   async resetDemo() {

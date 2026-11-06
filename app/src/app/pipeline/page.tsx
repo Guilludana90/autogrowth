@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { LeadDrawer } from '@/components/LeadDrawer';
 import { PageHead, ScoreBadge } from '@/components/ui';
 import { useStatusChange } from '@/components/useStatusChange';
 import { inRange } from '@/lib/domain/dates';
@@ -14,6 +15,7 @@ export default function PipelinePage() {
   const { leads, advisors } = useScoped(org);
   const { change, dialog } = useStatusChange();
   const [over, setOver] = useState<LeadStatus | null>(null);
+  const [openLead, setOpenLead] = useState<Lead | null>(null);
   const inPeriod = useMemo(() => leads.filter((l) => inRange(l.createdAt, range)), [leads, range]);
   const advisorName = (id?: string) => advisors.find((a) => a.id === id)?.name ?? 'Sin asignar';
 
@@ -45,7 +47,7 @@ export default function PipelinePage() {
                 {STATUS_LABEL[status]} <span className="faint">{items.length}</span>
               </h3>
               {items.map((l) => (
-                <Card key={l.id} lead={l} advisor={advisorName(l.advisorId)} onMove={(s) => change(l, s)} />
+                <Card key={l.id} lead={l} advisor={advisorName(l.advisorId)} onMove={(s) => change(l, s)} onOpen={() => setOpenLead(l)} />
               ))}
               {items.length === 0 && <div className="faint" style={{ padding: 8 }}>Sin leads</div>}
             </section>
@@ -53,17 +55,18 @@ export default function PipelinePage() {
         })}
       </div>
       {dialog}
+      <LeadDrawer lead={openLead} onClose={() => setOpenLead(null)} />
     </>
   );
 }
 
-function Card({ lead: l, advisor, onMove }: { lead: Lead; advisor: string; onMove: (s: LeadStatus) => void }) {
+function Card({ lead: l, advisor, onMove, onOpen }: { lead: Lead; advisor: string; onMove: (s: LeadStatus) => void; onOpen: () => void }) {
   const app = useApp();
   const canWrite = app.allowed('lead:write', l.organizationId);
   return (
     <article className="card" draggable={canWrite} onDragStart={(e) => e.dataTransfer.setData('text/plain', l.id)}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-        <strong>{l.name}</strong>
+        <button className="linklike" onClick={onOpen} aria-label={`Abrir ficha de ${l.name}`}>{l.name}</button>
         <ScoreBadge score={l.score} reason={l.scoreReason} />
       </div>
       <p>{l.modelInterest ?? 'Sin modelo'} · {orgName(l.organizationId)}</p>

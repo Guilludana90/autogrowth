@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 
 /** Diálogo modal nativo (<dialog>): foco atrapado, Esc para cerrar y backdrop accesible. */
 export function Dialog({
@@ -18,6 +18,7 @@ export function Dialog({
   footer?: ReactNode;
   wide?: boolean;
 }) {
+  const titleId = useId();
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const d = ref.current;
@@ -31,13 +32,13 @@ export function Dialog({
       ref={ref}
       onClose={onClose}
       onClick={(e) => e.target === ref.current && onClose()}
-      aria-labelledby="dlg-title"
+      aria-labelledby={titleId}
       style={wide ? { width: 'min(860px, calc(100vw - 32px))' } : undefined}
     >
       {open && (
         <>
           <div className="dlg-head">
-            <h2 id="dlg-title">{title}</h2>
+            <h2 id={titleId}>{title}</h2>
             <button className="btn ghost sm" onClick={onClose} aria-label="Cerrar">
               ✕
             </button>

@@ -15,6 +15,7 @@ export default function SystemPage() {
     ['Google Ads', 'Después de Meta', 'No conectado', 'gray'],
     ['WhatsApp Business', 'P4. No se toca el WhatsApp operativo', 'No conectado', 'gray'],
     ['Tecnom', 'Solo importación CSV manual y reversible. Nunca se escribe en Tecnom', 'CSV manual', 'amber'],
+    ['Documentos (Storage)', 'Las listas de precios guardan sus filas validadas; el archivo original irá a Supabase Storage privado', 'Pendiente', 'gray'],
     ['IA generativa', 'P3. Hoy las recomendaciones usan el motor de reglas rules-v1', 'No conectado', 'gray'],
   ];
   return (

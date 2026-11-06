@@ -16,5 +16,8 @@ trap cleanup EXIT
 PSQL=("${RUNAS[@]}" "$PGBIN/psql" -h "$DATA" -p "$PORT" -U postgres -d postgres -v ON_ERROR_STOP=1 -q)
 "${PSQL[@]}" -f supabase/tests/auth_stub.sql
 for f in supabase/migrations/*.sql; do echo "→ $f"; PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$f"; done
-"${PSQL[@]}" -o /dev/null -f supabase/tests/rls_test.sql 2>&1 | sed -E 's/^psql:[^ ]+ NOTICE:  //'
-exit "${PIPESTATUS[0]}"
+for t in supabase/tests/*_test.sql; do
+  echo "── $t"
+  "${PSQL[@]}" -o /dev/null -f "$t" 2>&1 | sed -E 's/^psql:[^ ]+ NOTICE:  //'
+  [ "${PIPESTATUS[0]}" = "0" ] || exit 1
+done
