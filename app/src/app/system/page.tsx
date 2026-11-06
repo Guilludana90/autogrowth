@@ -24,7 +24,9 @@ export default function SystemPage() {
     })(),
     ['Métricas por CSV (Meta / Google Ads)', 'Importación con vista previa, lotes reversibles y auditoría', 'Disponible', 'green'],
     ['Google Ads API', 'Después de Meta. Hoy por CSV', 'No conectado', 'gray'],
-    ['WhatsApp Business', 'P4. No se toca el WhatsApp operativo', 'No conectado', 'gray'],
+    ['WhatsApp Business', 'No se toca el WhatsApp operativo. El inbox registra conversaciones a mano y exige consentimiento vigente para respuestas', 'No conectado', 'gray'],
+    ['Instagram y Messenger', 'Solo registro manual en el inbox, con la ventana de 24 h controlada. Sin webhooks ni envío', 'No conectado', 'gray'],
+    ['Inbox, turnos, repuestos y conocimiento', 'Registro interno con RLS por concesionario, auditoría y estados validados en la base', 'Disponible', 'green'],
     ['Tecnom', 'Solo importación CSV manual y reversible. Nunca se escribe en Tecnom', 'CSV manual', 'amber'],
     ['Documentos (Storage)', 'Las listas de precios guardan sus filas validadas; el archivo original irá a Supabase Storage privado', 'Pendiente', 'gray'],
     [

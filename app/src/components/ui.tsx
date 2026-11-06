@@ -50,3 +50,8 @@ export function downloadFile(name: string, content: string, type = 'text/csv;cha
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+/** Etiqueta de estado a partir de un mapa [texto, tono]. */
+export function ToneTag({ value }: { value: readonly [string, string] }) {
+  return <span className={`tag ${value[1]}`}>{value[0]}</span>;
+}

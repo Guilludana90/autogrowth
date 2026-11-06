@@ -13,6 +13,12 @@ import type {
   Member,
   MetricImportJob,
   OrganizationId,
+  AppointmentEvent,
+  ConsentEvent,
+  ConversationMessage,
+  KnowledgeArticle,
+  PartsRequest,
+  ServiceAppointment,
   Platform,
   PriceDocument,
   PromptAction,
@@ -28,6 +34,25 @@ import { nextPromptStatus, VERSION_RE } from '../domain/governance';
 import type { CampaignRecommendation } from '../domain/recommendations';
 import { toRecommendationJson } from '../domain/recommendations';
 import { demoPrompts } from '../demo/seedP3';
+import { demoAppointments, demoInbox, demoKnowledge, demoParts } from '../demo/seedP4';
+import {
+  appointmentActions,
+  findConflicts,
+  nextAppointmentStatus,
+  nextArticleVersion,
+  nextKnowledgeStatus,
+  nextPartsStatus,
+  normalizePlate,
+  outboundCheck,
+  partsActions,
+  validateAppointment,
+  validatePartsStep,
+  APPOINTMENT_NEEDS_REASON,
+  type AppointmentAction,
+  type KnowledgeAction,
+  type PartsAction,
+} from '../domain/postventa';
+import { APPOINTMENT_STATUS_LABEL, CHANNEL_LABEL } from '../domain/types';
 import { ORGANIZATIONS } from '../domain/types';
 import { STATUS_LABEL } from '../domain/types';
 import { DEMO_CAMPAIGNS, demoLeads, demoMetrics } from '../demo/seed';
@@ -37,6 +62,12 @@ import type {
   AiStatus,
   ImportJob,
   NewPromptDraftInput,
+  NewAppointmentInput,
+  NewConsentInput,
+  NewKnowledgeInput,
+  NewMessageInput,
+  NewPartsInput,
+  PartsStepInput,
   LeadPatch,
   NewLeadInput,
   NewPriceDocumentInput,
@@ -47,7 +78,7 @@ import type {
   TaskPatch,
 } from './repository';
 
-const KEY = 'autogrowth:demo:v5';
+const KEY = 'autogrowth:demo:v6';
 
 interface DemoMetricJob extends MetricImportJob {
   previous: CampaignMetricsDaily[];
@@ -77,6 +108,12 @@ interface DemoState {
   promptEvents: PromptEvent[];
   runs: RecommendationRun[];
   feedback: RecommendationFeedback[];
+  appointments: ServiceAppointment[];
+  appointmentEvents: AppointmentEvent[];
+  parts: PartsRequest[];
+  knowledge: KnowledgeArticle[];
+  consents: ConsentEvent[];
+  messages: ConversationMessage[];
 }
 
 function readStorage(): DemoState | null {
@@ -117,7 +154,15 @@ export class DemoRepository implements Repository {
     const metrics = demoMetrics(this.today);
     const leads = demoLeads(this.today, metrics);
     const prompts = demoPrompts(this.today);
+    const svc = demoAppointments(this.today, leads);
+    const inbox = demoInbox(this.today, leads);
     return {
+      appointments: svc.appointments,
+      appointmentEvents: svc.events,
+      parts: demoParts(this.today),
+      knowledge: demoKnowledge(this.today),
+      consents: inbox.consents,
+      messages: inbox.messages,
       prompts: prompts.versions,
       promptEvents: prompts.events,
       runs: [],
@@ -649,6 +694,198 @@ export class DemoRepository implements Repository {
 
   async runAiAnalysis(): Promise<AiAnalysisResult> {
     throw new Error(DEMO_AI_OFF);
+  }
+
+  // ───────────── P4 ─────────────
+
+  async listAppointments() {
+    return clone(this.state.appointments);
+  }
+
+  async listAppointmentEvents() {
+    return clone(this.state.appointmentEvents);
+  }
+
+  private apptEvent(a: ServiceAppointment, from: ServiceAppointment['status'] | undefined, reason?: string) {
+    const createdAt = new Date().toISOString();
+    this.state.appointmentEvents.push({ id: uid(), appointmentId: a.id, fromStatus: from, toStatus: a.status, actorName: 'Usuario demo', reason, createdAt });
+    if (a.leadId) {
+      const lead = this.state.leads.find((l) => l.id === a.leadId);
+      const when = new Date(a.scheduledAt).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' });
+      if (lead) this.log(lead, 'service', `Turno de taller ${when}: ${APPOINTMENT_STATUS_LABEL[a.status][0]}${reason ? ` (${reason})` : ''}`);
+    }
+  }
+
+  /** Mismas validaciones que check_appointment(): datos, lead y asesor de la org, nada en el pasado, sin superposición por box. */
+  async createAppointment(input: NewAppointmentInput) {
+    const errors = validateAppointment(input, new Date());
+    if (errors.length) throw new Error(errors.join(' '));
+    if (input.leadId && !this.state.leads.some((l) => l.id === input.leadId && l.organizationId === input.organizationId)) throw new Error('El lead no pertenece a la organización');
+    if (input.advisorId && !this.state.members.some((m) => m.userId === input.advisorId && m.organizationId === input.organizationId)) throw new Error('El asesor de servicio no pertenece a la organización');
+    const clash = findConflicts(input, this.state.appointments)[0];
+    if (clash) throw new Error(`El ${input.bay} ya tiene un turno que se superpone (${clash.customerName}, ${new Date(clash.scheduledAt).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })})`);
+    const now = new Date().toISOString();
+    const a: ServiceAppointment = {
+      id: uid(),
+      ...input,
+      customerName: input.customerName.trim(),
+      vehicle: input.vehicle.trim(),
+      bay: input.bay.trim(),
+      plate: normalizePlate(input.plate),
+      notes: input.notes?.trim() || undefined,
+      status: 'scheduled',
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.state.appointments.push(a);
+    this.apptEvent(a, undefined);
+    this.commit();
+    return clone(a);
+  }
+
+  async transitionAppointment(id: string, action: AppointmentAction, reason?: string) {
+    const a = this.state.appointments.find((x) => x.id === id);
+    if (!a) throw new Error('Turno inexistente');
+    if (!appointmentActions(a, new Date()).includes(action)) throw new Error(action === 'no_show' && a.status !== 'delivered' ? 'Todavía no llegó la hora del turno' : `No se puede pasar de ${APPOINTMENT_STATUS_LABEL[a.status][0]} con esa acción`);
+    const r = reason?.trim();
+    if (APPOINTMENT_NEEDS_REASON.has(action) && !r) throw new Error('Indicá el motivo');
+    const from = a.status;
+    a.status = nextAppointmentStatus(action);
+    a.statusReason = r || undefined;
+    a.updatedAt = new Date().toISOString();
+    this.apptEvent(a, from, r);
+    this.commit();
+    return clone(a);
+  }
+
+  async listParts() {
+    return clone(this.state.parts);
+  }
+
+  async createPartsRequest(input: NewPartsInput) {
+    if (input.customerName.trim().length < 2) throw new Error('Indicá para quién es el pedido.');
+    if (input.description.trim().length < 2) throw new Error('Describí el repuesto o accesorio.');
+    if (!Number.isInteger(input.quantity) || input.quantity < 1 || input.quantity > 999) throw new Error('La cantidad tiene que estar entre 1 y 999.');
+    if (input.appointmentId && !this.state.appointments.some((a) => a.id === input.appointmentId && a.organizationId === input.organizationId)) throw new Error('El turno no pertenece a la organización');
+    const now = new Date().toISOString();
+    const p: PartsRequest = { id: uid(), ...input, customerName: input.customerName.trim(), description: input.description.trim(), partNumber: input.partNumber?.trim() || undefined, notes: input.notes?.trim() || undefined, currency: 'ARS', status: 'requested', createdAt: now, updatedAt: now };
+    this.state.parts.unshift(p);
+    this.commit();
+    return clone(p);
+  }
+
+  async transitionParts(id: string, action: PartsAction, step: PartsStepInput) {
+    const p = this.state.parts.find((x) => x.id === id);
+    if (!p) throw new Error('Pedido inexistente');
+    if (!partsActions(p).includes(action)) throw new Error('Ese paso no corresponde al estado actual del pedido');
+    const err = validatePartsStep(action, step, this.today);
+    if (err) throw new Error(err);
+    p.status = nextPartsStatus(action);
+    if (step.unitPrice !== undefined) p.unitPrice = step.unitPrice;
+    if (action === 'order' && step.eta) p.eta = step.eta;
+    if (action === 'cancel') p.statusReason = step.reason!.trim();
+    p.updatedAt = new Date().toISOString();
+    this.commit();
+    return clone(p);
+  }
+
+  async listKnowledge() {
+    return clone(this.state.knowledge);
+  }
+
+  async createKnowledgeDraft(input: NewKnowledgeInput) {
+    if (!/^[a-z0-9][a-z0-9-]{1,60}$/.test(input.articleKey)) throw new Error('La clave del artículo usa minúsculas, números y guiones.');
+    if (input.title.trim().length < 3) throw new Error('El título es muy corto.');
+    if (input.body.trim().length < 10) throw new Error('El contenido es muy corto.');
+    if (input.validTo && input.validTo < input.validFrom) throw new Error('La vigencia termina antes de empezar.');
+    const a: KnowledgeArticle = {
+      id: uid(),
+      ...input,
+      title: input.title.trim(),
+      body: input.body.trim(),
+      model: input.model?.trim() || undefined,
+      version: nextArticleVersion(this.state.knowledge.filter((k) => k.organizationId === input.organizationId), input.articleKey),
+      status: 'draft',
+      createdBy: DEMO_USER_ID,
+      createdByName: 'Usuario demo',
+      createdAt: new Date().toISOString(),
+    };
+    this.state.knowledge.push(a);
+    this.commit();
+    return clone(a);
+  }
+
+  async updateKnowledgeDraft(id: string, patch: Pick<KnowledgeArticle, 'title' | 'body' | 'validFrom' | 'validTo'>) {
+    const a = this.state.knowledge.find((k) => k.id === id);
+    if (!a) throw new Error('Artículo inexistente');
+    if (a.status !== 'draft' || a.createdBy !== DEMO_USER_ID) throw new Error('Solo el autor edita su borrador');
+    if (patch.title.trim().length < 3 || patch.body.trim().length < 10) throw new Error('Completá título y contenido.');
+    if (patch.validTo && patch.validTo < patch.validFrom) throw new Error('La vigencia termina antes de empezar.');
+    Object.assign(a, { ...patch, title: patch.title.trim(), body: patch.body.trim() });
+    this.commit();
+    return clone(a);
+  }
+
+  /** Estados y "nadie aprueba lo que escribió" como knowledge_transition(); el rol lo valida AppContext. */
+  async transitionKnowledge(id: string, action: KnowledgeAction, note?: string) {
+    const a = this.state.knowledge.find((k) => k.id === id);
+    if (!a) throw new Error('Artículo inexistente');
+    const n = note?.trim() || undefined;
+    if (action === 'submit') {
+      if (a.status !== 'draft') throw new Error('Solo un borrador se envía a revisión');
+      a.reviewNote = undefined;
+    } else if (action === 'approve' || action === 'reject') {
+      if (a.status !== 'in_review') throw new Error('Solo se decide sobre un artículo en revisión');
+      if (a.createdBy === DEMO_USER_ID) throw new Error('Nadie aprueba lo que escribió');
+      if (action === 'reject' && !n) throw new Error('Explicá qué hay que cambiar');
+      if (action === 'approve') {
+        for (const o of this.state.knowledge) if (o.organizationId === a.organizationId && o.articleKey === a.articleKey && o.status === 'published') o.status = 'archived';
+        a.approvedByName = 'Usuario demo';
+        a.approvedAt = new Date().toISOString();
+      }
+      a.reviewNote = n;
+    } else if (a.status !== 'published') throw new Error('Solo se archiva un artículo publicado');
+    a.status = nextKnowledgeStatus(action);
+    this.commit();
+    return clone(a);
+  }
+
+  async listConsents() {
+    return clone(this.state.consents);
+  }
+
+  async recordConsent(input: NewConsentInput) {
+    const lead = this.state.leads.find((l) => l.id === input.leadId && l.organizationId === input.organizationId);
+    if (!lead) throw new Error('El lead no pertenece a la organización');
+    if (input.source.trim().length < 2) throw new Error('Indicá cómo se obtuvo (formulario, verbal, firma…).');
+    const e: ConsentEvent = { id: uid(), ...input, source: input.source.trim(), evidence: input.evidence?.trim() || undefined, actorName: 'Usuario demo', createdAt: new Date().toISOString() };
+    this.state.consents.push(e);
+    this.log(lead, 'consent', `Consentimiento ${e.granted ? 'otorgado' : 'revocado'} para ${CHANNEL_LABEL[e.channel]} (${e.source})`);
+    this.commit();
+    return clone(e);
+  }
+
+  async listMessages() {
+    return clone(this.state.messages);
+  }
+
+  async logMessage(input: NewMessageInput) {
+    const lead = this.state.leads.find((l) => l.id === input.leadId && l.organizationId === input.organizationId);
+    if (!lead) throw new Error('El lead no pertenece a la organización');
+    const body = input.body.trim();
+    if (!body || body.length > 4000) throw new Error('El mensaje no puede quedar vacío ni superar 4.000 caracteres.');
+    const when = new Date(input.occurredAt);
+    if (!Number.isFinite(when.getTime())) throw new Error('Fecha inválida');
+    if (when.getTime() > Date.now() + 5 * 60_000) throw new Error('El mensaje no puede ser futuro');
+    if (input.direction === 'out') {
+      const chk = outboundCheck(input.channel, input.leadId, this.state.consents, this.state.messages, when);
+      if (!chk.ok) throw new Error(chk.reason);
+    }
+    const m: ConversationMessage = { id: uid(), ...input, body, occurredAt: when.toISOString(), loggedByName: 'Usuario demo', createdAt: new Date().toISOString() };
+    this.state.messages.push(m);
+    this.log(lead, 'message', `Mensaje ${m.direction === 'in' ? 'recibido' : 'enviado'} por ${CHANNEL_LABEL[m.channel]} (registro manual)`);
+    this.commit();
+    return clone(m);
   }
 
   async resetDemo() {

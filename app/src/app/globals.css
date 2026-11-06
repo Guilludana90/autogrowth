@@ -262,3 +262,44 @@ details summary { cursor: pointer; color: var(--muted); }
 .alert-card ul { margin: 0; padding-left: 18px; }
 textarea.field { min-height: 220px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.5; }
 @media (max-width: 900px) { .rec-cols, .rec-teams { grid-template-columns: 1fr; } }
+
+/* ───── P4: postventa, conocimiento e inbox ───── */
+textarea.field[rows='2'], textarea.field[rows='3'] { min-height: 0; font-family: inherit; font-size: 13px; }
+label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
+.bays { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.bay { background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: grid; gap: 8px; align-content: start; }
+.bay h3 { margin: 0 0 2px; font-size: 13px; color: var(--lavender); }
+.appt { all: unset; box-sizing: border-box; display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--line); border-left: 3px solid var(--line-2); border-radius: 8px; background: var(--panel); cursor: pointer; font-size: 13px; }
+.appt:hover { border-color: var(--line-2); background: var(--panel-2); }
+.appt:focus-visible { outline: 2px solid var(--focus); }
+.appt[data-status='confirmed'] { border-left-color: var(--indigo); }
+.appt[data-status='checked_in'] { border-left-color: var(--champagne); }
+.appt[data-status='in_progress'] { border-left-color: var(--amber); }
+.appt[data-status='ready'], .appt[data-status='delivered'] { border-left-color: var(--green); }
+.appt[data-status='cancelled'], .appt[data-status='no_show'] { border-left-color: var(--red); opacity: 0.7; }
+.appt-time { font-size: 12px; color: var(--champagne); font-weight: 700; }
+.kb, .inbox { display: grid; grid-template-columns: minmax(240px, 340px) 1fr; gap: 16px; align-items: start; }
+.kb-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 620px; overflow: auto; }
+.kb-list button { all: unset; box-sizing: border-box; display: grid; gap: 4px; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-2); cursor: pointer; font-size: 13px; }
+.kb-list button .tag { justify-self: start; }
+.kb-list button[aria-current='true'] { border-color: var(--lavender); background: var(--panel-2); }
+.kb-list button:focus-visible { outline: 2px solid var(--focus); }
+.kb-article { display: grid; gap: 12px; padding: 4px 4px 4px 0; min-width: 0; }
+.kb-article h2 { margin: 0; font-family: var(--font-display); font-size: 20px; }
+.kb-body { white-space: pre-wrap; line-height: 1.6; font-size: 14px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.kb-article details summary { cursor: pointer; color: var(--lavender); font-size: 13px; margin-bottom: 8px; }
+.versions { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+.inbox-snippet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.convo { display: grid; gap: 12px; min-width: 0; }
+.bubbles { list-style: none; margin: 0; padding: 12px; display: grid; gap: 8px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; max-height: 440px; overflow: auto; }
+.bubbles li { max-width: 78%; padding: 8px 12px; border-radius: 12px; display: grid; gap: 4px; font-size: 13px; white-space: pre-wrap; }
+.bubbles li.in { justify-self: start; background: var(--panel-2); border: 1px solid var(--line); }
+.bubbles li.out { justify-self: end; background: rgba(122, 103, 234, 0.16); border: 1px solid #4a3f80; }
+.bubbles li.empty { max-width: none; justify-self: stretch; }
+.bubbles .faint { font-size: 11px; }
+.log-form { display: grid; gap: 8px; }
+button.tag { font: inherit; font-size: 11px; font-weight: 700; background: transparent; }
+@media (max-width: 900px) { .kb, .inbox { grid-template-columns: 1fr; } .kb-list { max-height: 300px; } }
+.tabs { flex-wrap: wrap; max-width: 100%; }
+.panel-head > div { min-width: 0; max-width: 100%; }
+.panel-head input.field[type='search'] { min-width: 0; max-width: 100%; }

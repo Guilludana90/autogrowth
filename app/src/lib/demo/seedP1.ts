@@ -20,6 +20,7 @@ export const DEMO_MEMBERS: Member[] = [
     role: 'sales_advisor',
   })),
   { userId: 'ps-cardys', name: 'Taller Cardys (demo)', email: 'taller@cardys.demo', organizationId: 'cardys_fiat', role: 'post_sales' },
+  { userId: 'ps-overland', name: 'Taller Overland (demo)', email: 'taller@overland.demo', organizationId: 'overland_motors', role: 'post_sales' },
 ];
 
 const row = (model: string, version: string, price: number) => ({ model, version, price });
